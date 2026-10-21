@@ -174,3 +174,55 @@ details.list li + li { margin-top: 4px; }
 .date-line::first-letter { text-transform: uppercase; }
 .small { font-size: 13px; }
 input[type=file] { display: none; }
+
+/* Workout logging */
+.log-card .name { font-weight: 600; font-size: 18px; }
+.log-card .meta { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.sets { margin-top: 12px; display: grid; gap: 8px; }
+.set-row { display: grid; grid-template-columns: 28px 1fr 1fr 48px; gap: 8px; align-items: center; }
+.set-no { color: var(--muted); font-weight: 600; text-align: center; }
+.set-row label, .field { position: relative; display: block; }
+.set-row input, .field input, .add-row input {
+  width: 100%; min-height: 48px; padding: 0 44px 0 12px;
+  border: 0; border-radius: 10px; background: var(--bg); color: var(--text);
+  font: inherit; font-size: 17px; font-variant-numeric: tabular-nums;
+}
+.set-row label span { position: absolute; right: 10px; top: 50%; transform: translateY(-50%); font-size: 13px; color: var(--muted); pointer-events: none; }
+.set-row .check {
+  display: grid; place-items: center; width: 48px; height: 48px;
+  border: 0; border-radius: 10px; background: var(--bg); color: var(--muted);
+}
+.set-row.done .check { background: var(--good); color: #fff; }
+.set-row.done input { background: color-mix(in srgb, var(--good) 14%, var(--bg)); }
+.link-btn {
+  display: inline-flex; align-items: center; gap: 6px; margin-top: 10px; padding: 8px 0;
+  border: 0; background: none; color: var(--accent); font: inherit; font-weight: 500;
+}
+.rest-bar {
+  position: fixed; left: 12px; right: 12px; z-index: 20;
+  bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom) + 10px);
+  display: flex; align-items: center; gap: 10px;
+  padding: 12px 14px; border-radius: 14px;
+  background: var(--text); color: var(--bg);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+}
+.rest-bar .grow { flex: 1; }
+.rest-bar b { font-size: 22px; font-variant-numeric: tabular-nums; }
+.rest-bar button { border: 0; border-radius: 8px; padding: 8px 12px; background: color-mix(in srgb, var(--bg) 20%, transparent); color: inherit; font: inherit; font-weight: 600; }
+.rest-bar.done { background: var(--good); color: #fff; }
+.record { display: flex; gap: 12px; align-items: center; background: var(--accent-soft); color: var(--accent); }
+.record p { color: inherit; }
+
+/* Plan editor */
+.edit-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.fields { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; margin-top: 8px; }
+.field span { display: block; font-size: 12px; color: var(--muted); margin: 0 0 4px 2px; }
+.field input { padding: 0 8px; text-align: center; min-height: 44px; }
+.icon-btn {
+  display: grid; place-items: center; width: 40px; height: 40px; flex: none;
+  border: 0; border-radius: 10px; background: var(--bg); color: var(--muted);
+}
+.icon-btn.accent { background: var(--accent); color: #fff; width: 48px; height: 48px; }
+.add-row { display: flex; gap: 8px; align-items: center; padding: 10px; }
+.add-row input { padding: 0 12px; }
+a.list.row { display: flex; }

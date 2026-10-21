@@ -1,5 +1,5 @@
 // Offline-first cache for the app shell. Bump VERSION when shipping changes.
-const VERSION = 'v1';
+const VERSION = 'v2';
 const SHELL = [
   './', 'index.html', 'styles.css', 'manifest.webmanifest',
   'js/app.js', 'js/db.js', 'js/icons.js',
