@@ -8,6 +8,9 @@ const OFF_FIELDS = 'code,product_name,product_name_pl,brands,nutriments,serving_
 
 const num = (v) => (v == null || v === '' || Number.isNaN(Number(v)) ? null : Math.round(Number(v) * 10) / 10);
 
+// Fibre, sugars, saturated fat and salt per 100 g, only the ones the database has.
+const micros = (m) => Object.fromEntries(Object.entries(m).map(([k, v]) => [k, num(v)]).filter(([, v]) => v != null));
+
 function fromOff(p) {
   const n = p.nutriments ?? {};
   const kcal = num(n['energy-kcal_100g']) ?? (n['energy_100g'] ? num(n['energy_100g'] / 4.184) : null);
@@ -18,7 +21,10 @@ function fromOff(p) {
     code: p.code,
     name: (p.product_name_pl || p.product_name || '').trim() || `Produkt ${p.code}`,
     brand: brands || null,
-    per100: { kcal, p: num(n.proteins_100g) ?? 0, f: num(n.fat_100g) ?? 0, c: num(n.carbohydrates_100g) ?? 0 },
+    per100: {
+      kcal, p: num(n.proteins_100g) ?? 0, f: num(n.fat_100g) ?? 0, c: num(n.carbohydrates_100g) ?? 0,
+      ...micros({ fib: n.fiber_100g, sug: n.sugars_100g, sat: n['saturated-fat_100g'], salt: n.salt_100g }),
+    },
     servingG: num(p.serving_quantity),
   };
 }
@@ -52,7 +58,8 @@ export async function lookupBarcode(code) {
   return body.product ? fromOff({ code, ...body.product }) : null;
 }
 
-const USDA_NUTRIENTS = { 208: 'kcal', 203: 'p', 204: 'f', 205: 'c' };
+// Nutrient numbers; sodium (307, mg) is turned into salt (g × 2.5).
+const USDA_NUTRIENTS = { 208: 'kcal', 203: 'p', 204: 'f', 205: 'c', 291: 'fib', 269: 'sug', 606: 'sat', 307: 'sodium' };
 
 export async function searchUsda(query, apiKey) {
   const url = `https://api.nal.usda.gov/fdc/v1/foods/search?api_key=${encodeURIComponent(apiKey || 'DEMO_KEY')}`
@@ -67,6 +74,8 @@ export async function searchUsda(query, apiKey) {
       const key = USDA_NUTRIENTS[Number(n.nutrientNumber)];
       if (key && n.value != null) per100[key] = num(n.value);
     }
+    if (per100.sodium != null) per100.salt = num(per100.sodium * 2.5 / 1000);
+    delete per100.sodium;
     return per100.kcal == null ? null : { source: 'usda', code: String(f.fdcId), name: nameToPolish(f.description), original: f.description, brand: null, per100 };
   }).filter(Boolean);
 }

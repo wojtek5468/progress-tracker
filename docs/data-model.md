@@ -76,3 +76,23 @@ Plik z nowszej wersji jest odrzucany, żeby stara kopia aplikacji nie zgubiła p
 
 Pola dodane w wersji 2 bez migracji (opcjonalne): `profile.goalWeightKg`, `profile.goalDate`, `profile.carbCycling`, `profile.trainingDays[]` (1 = poniedziałek),
 `settings.lastReviewDate`, `settings.autoProgression`, `settings.restSound`, `settings.barKg`, `settings.plates[]`, `workoutLogs[].importKey` (trening z Hevy/Strong), pozycja planu `group` (superseria).
+
+Pola dodane później w wersji 2, też opcjonalne i bez migracji:
+
+| Pole | Kształt | Uwagi |
+|---|---|---|
+| `workoutLogs[].cardio` | `{type, minutes, km?, avgHr?, kcal}` | Cardio wpisane w aplikacji: `entries: []`, `volumeKg: 0`. Kcal z MET: (MET−1) × kg × h. |
+| `settings.pain` | `{ [exerciseId]: {note, since} }` | „Boli”: przy nowym treningu ćwiczenie jest zamieniane na podobne (`swappedFor` w szkicu). |
+| `settings.equipment[]` | nazwy z `EQUIPMENT` | Pusty = pełna siłownia. Zamiany i gotowe plany biorą pod uwagę tylko ten sprzęt; pozycja planu po zamianie ma `swappedFrom`. |
+| `settings.trendOnly` | bool | Pokazuje tylko wygładzony trend wagi. |
+| `recipes[]` | `{id, name, portions, minutes, meals[], items: [{key, name, grams, per100}], steps[]}` | Własne przepisy; `key` to `source:code` produktu, a `per100` jest kopią, więc przepis nie zależy od listy produktów. |
+| `mealPlan` | `{ 'YYYY-MM-DD': [{id, meal, recipeId, portions}] }` | Jadłospis; `settings.shoppingChecked` = odhaczone pozycje listy zakupów (`tydzień|key`). |
+| `dailyLogs[].waterMl` | number | Woda; cel `settings.waterGoalMl` albo 35 ml/kg. |
+| `foods[].per100.fib`, `.sug`, `.sat`, `.salt` | g na 100 g | Błonnik, cukry, tłuszcze nasycone, sól (z OFF, USDA albo wpisane). |
+| `foods[].pricePerKg`, `foods[].uses` | | Cena do kosztu dnia i białka za złotówkę; licznik użyć do kolejności podpowiedzi. |
+| `profile.weeklyBudget`, `settings.mealTargets` | bool | Budżet tygodnia (±15% dziennie); cel kalorii przy posiłkach (domyślnie włączony). |
+| `challenges[]` | `{id, kind: 'steps'\|'protein'\|'water'\|'log'\|'workouts', target, days, start, name, from?}` | Wyzwania z linku; postęp liczony z danych na telefonie. |
+| `settings.cloudUrl`, `settings.reminders`, `settings.reportName` | | Adres własnego Workera, przypomnienia `{workout\|weigh\|food: {on, time}}`, imię w raporcie i zaproszeniach. |
+
+Poza `data` (osobne klucze IndexedDB, nie trafiają do kopii ani synchronizacji): `photos` (zdjęcia sylwetki jako JPEG),
+`sync` (identyfikator skrytki, token i klucz synchronizacji), `reminders` (lista dla service workera), `offAccount`, `draft`.

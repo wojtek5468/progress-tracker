@@ -15,11 +15,11 @@ function loadZxing() {
   return zxing;
 }
 
-// Resolves with the EAN/UPC code, or null when the user closes the scanner.
-export async function scanBarcode() {
+// Resolves with the EAN/UPC code (or the QR text with `qr`), or null when the user closes the scanner.
+export async function scanBarcode({ qr = false } = {}) {
   if (!navigator.mediaDevices?.getUserMedia) throw new Error('Ta przeglądarka nie daje dostępu do aparatu.');
   const ZXing = await loadZxing();
-  const hints = new Map([[ZXing.DecodeHintType.POSSIBLE_FORMATS, [
+  const hints = new Map([[ZXing.DecodeHintType.POSSIBLE_FORMATS, qr ? [ZXing.BarcodeFormat.QR_CODE] : [
     ZXing.BarcodeFormat.EAN_13, ZXing.BarcodeFormat.EAN_8, ZXing.BarcodeFormat.UPC_A, ZXing.BarcodeFormat.UPC_E,
   ]]]);
   const reader = new ZXing.BrowserMultiFormatReader(hints, 300);
@@ -29,7 +29,7 @@ export async function scanBarcode() {
   overlay.innerHTML = `
     <video playsinline muted autoplay></video>
     <div class="scanner-frame"></div>
-    <p class="scanner-hint">Nakieruj aparat na kod kreskowy</p>
+    <p class="scanner-hint">${qr ? 'Nakieruj aparat na kod QR z drugiego telefonu' : 'Nakieruj aparat na kod kreskowy'}</p>
     <button type="button" class="scanner-close" aria-label="Zamknij skaner">${icon('x')}</button>`;
   document.body.append(overlay);
   const video = overlay.querySelector('video');
