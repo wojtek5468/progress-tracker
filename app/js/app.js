@@ -13,131 +13,12 @@ import { SCHEMA_VERSION, migrate, checkImport } from './migrate.js';
 import { parseHealthText } from './health-text.js';
 import { workoutsFromCsv, EXERCISE_MAP, sharedPlan, encodePlan, decodePlan } from './importers.js';
 import { parseMealText, lineGrams, unitGrams, searchName, UNITS } from './measures.js';
+import {
+  MEALS, view, titleEl, backBtn, data, exerciseById, NO_1RM_CATEGORIES, BLOCK_NAMES, esc, fmt, exInfo, exName, uid, sessionTitle, targets, isoWeekday, isTrainingDay, targetsFor, weightPoints, dailyIntake, adaptive, dateLabel, setData, render, currentWeek, sessionSummary, lastWithin, avg, todayIso, save, sessionKey, current1RM, previousSets, suggestedKg, defaultReps, ensureExercise, foodById, entryMacros, sumMacros, dayEntries, shiftDate, saveFood,
+} from './core.js';
 
-const MEALS = { breakfast: 'Śniadanie', lunch: 'Obiad', dinner: 'Kolacja', snack: 'Przekąski' };
-
-const view = document.getElementById('view');
-const titleEl = document.getElementById('title');
-const backBtn = document.getElementById('back');
-
-let data = null;
-let exerciseById = new Map();
 // Barcode that was not found in Open Food Facts; attached to the next custom product.
 let pendingBarcode = null;
-
-const NO_1RM_CATEGORIES = new Set(['Siła eksplozywna', 'Kondycja', 'Mobilność', 'Rozgrzewka']);
-const BLOCK_NAMES = { warmup: 'Rozgrzewka', main: 'Część główna', cooldown: 'Wyciszenie' };
-
-// ---------- helpers ----------
-
-const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
-const fmt = (n, d = 0) => n == null ? '–' : Number(n).toLocaleString('pl-PL', { maximumFractionDigits: d });
-const exInfo = (id) => {
-  const ex = exerciseById.get(id);
-  const cat = CATALOG[id];
-  return {
-    name: ex?.customName ?? cat?.name ?? ex?.name ?? id,
-    desc: ex?.description ?? cat?.desc ?? '',
-    cat: ex?.cat ?? cat?.cat ?? 'Inne',
-    original: ex?.name ?? id,
-  };
-};
-const exName = (id) => exInfo(id).name;
-const uid = (prefix) => `${prefix}-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`;
-const sessionTitle = (s) => s.name || `Trening ${s.order}`;
-const targets = () => computeTargets(data.profile, data.dailyLogs, data.profile.tdeeMode === 'adaptive' ? adaptive() : null);
-const isoWeekday = (iso) => new Date(`${iso}T12:00:00`).getDay() || 7;
-// Planned training weekday, or any day with a logged workout.
-const isTrainingDay = (date) => (data.profile.trainingDays ?? []).includes(isoWeekday(date)) || data.workoutLogs.some((l) => l.date === date);
-// Targets for one day: with training-day macros on, carbs move between training and rest days.
-const targetsFor = (date) => (data.profile.carbCycling
-  ? dayTargets(targets(), isTrainingDay(date), data.profile.trainingDays?.length ?? 0) : targets());
-const weightPoints = () => (data.bodyMeasurements ?? []).filter((m) => m.weightKg).map((m) => ({ date: m.date, value: m.weightKg }));
-// Calories eaten per day, from the food diary.
-const dailyIntake = () => Object.fromEntries(Object.entries(data.foodLog ?? {})
-  .filter(([, entries]) => entries.length).map(([d, entries]) => [d, sumMacros(entries).kcal]));
-const adaptive = () => adaptiveTdee(weightTrend(weightPoints()), dailyIntake(), todayIso());
-const dateLabel = (iso) => new Date(iso).toLocaleDateString('pl-PL', { day: 'numeric', month: 'short' });
-
-function setData(d) {
-  data = d;
-  if (d) migrate(d);
-  exerciseById = new Map((d?.exercises ?? []).map((e) => [e.id, e]));
-}
-
-function render(title, html, { back = null } = {}) {
-  titleEl.textContent = title;
-  backBtn.hidden = !back;
-  backBtn.onclick = back === 'history' ? () => history.back() : back ? () => { location.hash = back; } : null;
-  view.oninput = view.onclick = null;
-  view.innerHTML = html;
-  window.scrollTo(0, 0);
-}
-
-function currentWeek() {
-  const programs = data.programs.filter((p) => p.weeks.length);
-  if (!programs.length) return null;
-  const program = programs.find((p) => p.id === data.settings.currentProgram) ?? programs.at(-1);
-  const week = program.weeks.find((w) => w.number === data.settings.currentWeek) ?? program.weeks.at(-1);
-  return { program, week };
-}
-
-function sessionSummary(session) {
-  const main = session.blocks.find((b) => b.type === 'main')?.items ?? [];
-  return main.slice(0, 3).map((i) => exName(i.exerciseId)).join(', ') + (main.length > 3 ? '…' : '');
-}
-
-function lastWithin(list, key, days) {
-  const cutoff = new Date(Date.now() - days * 864e5).toISOString().slice(0, 10);
-  return list.filter((l) => l.date >= cutoff && l[key] != null).map((l) => l[key]);
-}
-
-const avg = (xs) => xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null;
-const todayIso = () => new Date().toLocaleDateString('sv-SE');
-const save = () => db.set('data', data);
-const sessionKey = (programId, weekNumber, order) => `${programId}/${weekNumber}/${order}`;
-
-function current1RM(exerciseId) {
-  const rows = (data.oneRepMaxes ?? []).filter((m) => m.exerciseId === exerciseId);
-  if (!rows.length) return null;
-  const dated = rows.filter((m) => m.date).sort((a, b) => a.date.localeCompare(b.date));
-  return (dated.at(-1) ?? rows.reduce((a, b) => (b.estimated1RM > a.estimated1RM ? b : a))).estimated1RM;
-}
-
-// Sets from the most recent logged workout that included this exercise.
-function previousSets(exerciseId, beforeDate = '9999') {
-  const logs = (data.workoutLogs ?? []).filter((l) => l.date < beforeDate && l.entries.some((e) => e.exerciseId === exerciseId));
-  const last = logs.sort((a, b) => a.date.localeCompare(b.date) || a.id.localeCompare(b.id)).at(-1);
-  return last ? { date: last.date, sets: last.entries.filter((e) => e.exerciseId === exerciseId).flatMap((e) => e.sets).filter((x) => !x.warmup) } : null;
-}
-
-function suggestedKg(item) {
-  if (item.percent1RM) {
-    const max = current1RM(item.exerciseId);
-    if (max) return round25(item.percent1RM * max);
-  }
-  return item.actualKg ?? item.plannedKg ?? null;
-}
-
-function defaultReps(item) {
-  if (item.reps != null) return item.reps;
-  const m = String(item.repsText ?? '').match(/\d+/);
-  return m ? Number(m[0]) : null;
-}
-
-function ensureExercise(name) {
-  const clean = name.trim();
-  const lower = clean.toLowerCase();
-  const found = data.exercises.find((e) => exName(e.id).toLowerCase() === lower || e.name.toLowerCase() === lower);
-  if (found) return found.id;
-  let id = lower.normalize('NFKD').replace(/[̀-ͯ]/g, '').replace(/ł/g, 'l')
-    .replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'cwiczenie';
-  while (exerciseById.has(id)) id += '-x';
-  const ex = { id, name: clean, customName: clean, uses: 0 };
-  data.exercises.push(ex);
-  exerciseById.set(id, ex);
-  return id;
-}
 
 // ---------- views ----------
 
@@ -2006,42 +1887,6 @@ function viewExercise(rawId) {
   });
 }
 
-function foodById(id) {
-  return data.foods.find((f) => f.id === id);
-}
-
-function entryMacros(entry) {
-  // Quick entries carry their own numbers instead of a product.
-  if (entry.quick) return { kcal: entry.quick.kcal ?? 0, p: entry.quick.p ?? 0, f: entry.quick.f ?? 0, c: entry.quick.c ?? 0 };
-  const food = foodById(entry.foodId);
-  const k = (entry.grams ?? 0) / 100;
-  if (!food) return { kcal: 0, p: 0, f: 0, c: 0 };
-  return { kcal: food.per100.kcal * k, p: food.per100.p * k, f: food.per100.f * k, c: food.per100.c * k };
-}
-
-function sumMacros(entries) {
-  return entries.reduce((s, e) => {
-    const m = entryMacros(e);
-    return { kcal: s.kcal + m.kcal, p: s.p + m.p, f: s.f + m.f, c: s.c + m.c };
-  }, { kcal: 0, p: 0, f: 0, c: 0 });
-}
-
-const dayEntries = (date) => (data.foodLog[date] ??= []);
-const shiftDate = (iso, days) => {
-  const d = new Date(`${iso}T12:00:00`);
-  d.setDate(d.getDate() + days);
-  return d.toLocaleDateString('sv-SE');
-};
-
-function saveFood(food) {
-  if (data.foods.includes(food)) return food;
-  // Reuse a product already saved from the same database entry.
-  const existing = food.code && data.foods.find((f) => f.source === food.source && f.code === food.code);
-  if (existing) return existing;
-  const saved = { id: uid('food'), ...food };
-  data.foods.push(saved);
-  return saved;
-}
 
 function viewDiet(date = todayIso()) {
   const t = targetsFor(date);
