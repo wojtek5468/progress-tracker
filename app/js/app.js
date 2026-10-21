@@ -26,7 +26,10 @@ import { waterGoalMl } from './diet-plus.js';
 import { viewCloud, viewReceive, viewReport, viewReportShared } from './views-platform.js';
 import { startAutoSync, setTempCloudUrl, cloudUrl } from './cloud.js';
 import {
-  MEALS, view, titleEl, backBtn, data, exerciseById, NO_1RM_CATEGORIES, BLOCK_NAMES, esc, fmt, exInfo, exName, uid, sessionTitle, targets, isoWeekday, isTrainingDay, targetsFor, weightPoints, dailyIntake, adaptive, dateLabel, setData, render, currentWeek, sessionSummary, lastWithin, avg, todayIso, save, sessionKey, current1RM, previousSets, suggestedKg, defaultReps, ensureExercise, foodById, entryMacros, sumMacros, dayEntries, shiftDate, saveFood,
+  viewChallenges, viewChallenge, viewChallengeJoin, challengesToday, viewWrapped, equipmentSettings, bindEquipmentSettings, adaptToEquipment,
+} from './views-extra.js';
+import {
+  MEALS, view, titleEl, backBtn, data, exerciseById, NO_1RM_CATEGORIES, BLOCK_NAMES, esc, fmt, exInfo, exName, uid, sessionTitle, targets, isoWeekday, isTrainingDay, targetsFor, weightPoints, dailyIntake, adaptive, dateLabel, setData, render, currentWeek, sessionSummary, lastWithin, avg, todayIso, save, sessionKey, current1RM, previousSets, suggestedKg, defaultReps, ensureExercise, foodById, entryMacros, sumMacros, dayEntries, shiftDate, saveFood, plural,
 } from './core.js';
 
 // Barcode that was not found in Open Food Facts; attached to the next custom product.
@@ -295,8 +298,9 @@ async function viewToday() {
       <a class="stat" href="#/steps"><div class="label">${icon('footprints', 'icon-sm')} Kroki</div><div class="value">${fmt(stepsToday)}</div>
         <div class="bar thin"><span style="width:${Math.min(100, Math.round((stepsToday ?? 0) / stepsGoal() * 100))}%"></span></div></a>
       <div class="stat"><div class="label">${icon('moon', 'icon-sm')} Sen</div><div class="value">${sleep7 ? `${Math.floor(sleep7 / 60)}<span class="unit">h</span>${Math.round(sleep7 % 60)}` : '–'}</div></div>
-      <a class="stat" href="#/progress"><div class="label">${icon('scale', 'icon-sm')} Waga</div><div class="value">${fmt(data.profile.weightKg, 1)}</div></a>
+      <a class="stat" href="#/progress"><div class="label">${icon('scale', 'icon-sm')} Waga</div><div class="value">${fmt(data.settings.trendOnly ? weightTrend(weightPoints()).at(-1)?.trend ?? data.profile.weightKg : data.profile.weightKg, 1)}</div></a>
     </div>
+    ${challengesToday()}
     ${cw ? `<div class="section-title">Ten tydzień</div>${sessionList(cw.program, cw.week)}` : ''}
     ${lastLog ? `<a class="list row" href="#/history/${lastLog.id}">${icon('check', 'icon-sm')}
       <div class="grow"><div class="title">Ostatni trening</div><div class="sub">${dateLabel(lastLog.date)} · ${esc(lastLog.title)}</div></div>
@@ -834,9 +838,9 @@ function viewProgress() {
     <div class="card">
       <p>Waga · trend z 12 miesięcy</p>
       <h2>${fmt(trend.at(-1)?.trend, 1)} kg${lastBody?.bodyFatPct ? ` <span class="muted" style="font-size:15px;font-weight:500">· ${fmt(lastBody.bodyFatPct, 1)}% tłuszczu</span>` : ''}</h2>
-      <p class="small">${rate != null ? `${rate > 0 ? '+' : rate < 0 ? '−' : ''}${fmt(Math.abs(rate), 2)} kg/tydzień (ostatnie 3 tygodnie)` : 'Tempo pokaże się po tygodniu pomiarów.'}${lastBody?.weightKg ? ` · ostatni pomiar ${fmt(lastBody.weightKg, 1)} kg` : ''}</p>
-      ${sparkline(recent, 'kg', { trend: recent.map((p) => ({ date: p.date, value: p.trend })) })}
-      <p class="small muted" style="margin-top:6px">Kropki to pomiary, linia to średnia wygładzona. Dzienne wahania o 1–2 kg to głównie woda.</p>
+      <p class="small">${rate != null ? `${rate > 0 ? '+' : rate < 0 ? '−' : ''}${fmt(Math.abs(rate), 2)} kg/tydzień (ostatnie 3 tygodnie)` : 'Tempo pokaże się po tygodniu pomiarów.'}${lastBody?.weightKg && !data.settings.trendOnly ? ` · ostatni pomiar ${fmt(lastBody.weightKg, 1)} kg` : ''}</p>
+      ${data.settings.trendOnly ? sparkline(recent.map((p) => ({ date: p.date, value: p.trend })), 'kg') : sparkline(recent, 'kg', { trend: recent.map((p) => ({ date: p.date, value: p.trend })) })}
+      <p class="small muted" style="margin-top:6px">${data.settings.trendOnly ? 'Pokazuję tylko trend (Ustawienia → Tylko trend wagi), bez dziennych wyników.' : 'Kropki to pomiary, linia to średnia wygładzona. Dzienne wahania o 1–2 kg to głównie woda.'}</p>
     </div>
     ${data.profile.goalWeightKg ? goalCard() : ''}
     <a class="card" href="#/review" style="display:block;color:inherit;text-decoration:none"><p>${icon('calendar-check', 'icon-xs')} Przegląd tygodnia</p>
@@ -849,6 +853,10 @@ function viewProgress() {
     ${plateauCard()}
     <a class="list row" href="#/calendar">${icon('calendar', 'icon-sm')}<div class="grow"><div class="title">Kalendarz treningów</div>
       <div class="sub">${streakLine() || 'Dni z treningami i seria tygodni'}</div></div><span class="chev">${icon('chevron-right', 'icon-sm')}</span></a>
+    <a class="list row" href="#/wrapped">${icon('sparkles', 'icon-sm')}<div class="grow"><div class="title">Mój rok w liczbach</div>
+      <div class="sub">Podsumowanie roku z obrazkiem do udostępnienia</div></div><span class="chev">${icon('chevron-right', 'icon-sm')}</span></a>
+    <a class="list row" href="#/challenges">${icon('flag', 'icon-sm')}<div class="grow"><div class="title">Wyzwania ze znajomymi</div>
+      <div class="sub">Kroki, białko, woda, treningi: zaproszenie linkiem</div></div><span class="chev">${icon('chevron-right', 'icon-sm')}</span></a>
     <a class="list row" href="#/report">${icon('file-text', 'icon-sm')}<div class="grow"><div class="title">Raport dla trenera</div>
       <div class="sub">Podsumowanie 4–12 tygodni: link albo PDF</div></div><span class="chev">${icon('chevron-right', 'icon-sm')}</span></a>
     <a class="list row" href="#/photos">${icon('camera', 'icon-sm')}<div class="grow"><div class="title">Zdjęcia sylwetki</div>
@@ -896,7 +904,13 @@ async function viewSettings() {
       <label class="row"><span class="grow">Dźwięk po przerwie</span><input type="checkbox" id="rest-sound" ${st.restSound === false ? '' : 'checked'} style="width:auto"></label>
       <label class="row"><span class="grow">Sztanga (kg)</span><input id="bar-kg" inputmode="decimal" value="${fmt(st.barKg ?? DEFAULT_BAR_KG, 2)}"></label>
       <label class="row stacked"><span>Talerze na Twojej siłowni (kg, oddziel średnikami)</span><input id="plates" value="${(st.plates ?? DEFAULT_PLATES).map((x) => fmt(x, 2)).join('; ')}"></label>
-    </div>` : ''}
+    </div>
+    ${equipmentSettings()}
+    <div class="section-title">Waga</div>
+    <div class="list form">
+      <label class="row"><span class="grow">Pokazuj tylko trend wagi</span><input type="checkbox" id="trend-only" ${st.trendOnly ? 'checked' : ''} style="width:auto"></label>
+    </div>
+    <p class="muted small" style="margin:0 4px 12px">Dla osób, które stresuje codzienny wynik: zamiast dziennych pomiarów widać tylko wygładzoną linię.</p>` : ''}
     <div class="section-title">Dane</div>
     <div class="list">
       ${data ? `<a class="row" href="#/steps"><span class="grow">Kroki i Zdrowie (Skróty)</span><span class="chev">${icon('chevron-right', 'icon-sm')}</span></a>` : ''}
@@ -910,6 +924,11 @@ async function viewSettings() {
     <p class="muted small" style="text-align:center;margin-top:24px">Ikony: Lucide (licencja ISC).<br>Dane są przechowywane wyłącznie na tym urządzeniu.</p>
   `, { back: '#/today' });
   bindImport();
+  bindEquipmentSettings(viewSettings);
+  document.getElementById('trend-only')?.addEventListener('change', async (ev) => {
+    data.settings.trendOnly = ev.target.checked;
+    await save();
+  });
   document.getElementById('import-csv')?.addEventListener('change', async (e) => {
     const file = e.target.files[0];
     e.target.value = '';
@@ -2894,6 +2913,8 @@ function viewTemplate(id) {
 function addTemplateProgram(t) {
   for (const exId of templateExerciseIds(t)) addCatalogExercise(exId);
   const program = buildProgram(t, uid('plan'));
+  const fit = adaptToEquipment(program, addCatalogExercise);
+  if (fit.swapped) alert(`Dopasowano do Twojego sprzętu: ${fit.swapped} ${plural(fit.swapped, 'ćwiczenie', 'ćwiczenia', 'ćwiczeń')} zamieniono na podobne.${fit.left ? ` ${fit.left} nadal wymaga sprzętu, którego nie masz; zamienisz je w trakcie treningu.` : ''}`);
   data.programs.push(program);
   data.settings.currentProgram = program.id;
   data.settings.currentWeek = 1;
@@ -2936,6 +2957,11 @@ const ROUTES = [
   [/^#\/photos$/, () => viewPhotos(), 'progress'],
   [/^#\/photos\/(\w+)$/, viewPhotos, 'progress'],
   [/^#\/cloud$/, viewCloud, null],
+  [/^#\/challenges$/, viewChallenges, 'today'],
+  [/^#\/challenge\/([\w-]+)$/, viewChallenge, 'today'],
+  [/^#\/challenge-join\/([\w-]+)$/, viewChallengeJoin, 'today'],
+  [/^#\/wrapped$/, () => viewWrapped(), 'progress'],
+  [/^#\/wrapped\/(\d{4})$/, viewWrapped, 'progress'],
   [/^#\/receive\/([\w.-]+)$/, viewReceive, null],
   [/^#\/report$/, () => viewReport(), 'progress'],
   [/^#\/report\/(\d+)$/, viewReport, 'progress'],

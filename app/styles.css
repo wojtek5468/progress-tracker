@@ -352,7 +352,7 @@ code { font-size: 13px; background: var(--bg); padding: 1px 5px; border-radius: 
 .quick { display: flex; gap: 8px; margin-bottom: 12px; }
 .quick a, .quick button {
   flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 10px 4px;
-  border-radius: 12px; background: var(--card); color: var(--accent); text-decoration: none; font-size: 13px; font-weight: 600; border: 0; font-family: inherit;
+  border-radius: 12px; background: var(--card); color: var(--accent); text-decoration: none; font-size: 12px; font-weight: 600; border: 0; font-family: inherit; text-align: center;
 }
 .stats.three { grid-template-columns: repeat(3, 1fr); gap: 8px; }
 .stats.three .stat { padding: 12px; }
@@ -486,3 +486,7 @@ span.weekdays span { padding: 0 10px; font-size: 13px; }
   body { background: #fff; color: #000; }
   .card, .list, .report-table, .stat { box-shadow: none; border: 1px solid #ddd; }
 }
+.ch-days { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 10px; }
+.ch-days i { width: 14px; height: 14px; border-radius: 4px; background: var(--bg); border: 1px solid var(--separator, rgba(128,128,128,.3)); }
+.ch-days i.on { background: var(--good); border-color: var(--good); }
+.ch-days i.later { opacity: .4; }
