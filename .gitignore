@@ -1,0 +1,4 @@
+# Personal data stays out of the repo; the app imports it at runtime.
+data/
+*.xlsx
+__pycache__/
