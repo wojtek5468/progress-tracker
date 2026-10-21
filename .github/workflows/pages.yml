@@ -3,6 +3,8 @@ name: Deploy app to GitHub Pages
 on:
   push:
     branches: [main]
+  schedule:
+    - cron: '0 4 * * 1' # Mondays: refresh the Polish product list from Open Food Facts
   workflow_dispatch:
 
 permissions:
@@ -22,6 +24,17 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
+      - id: week
+        run: echo "week=$(date -u +%G-%V)" >> "$GITHUB_OUTPUT"
+      # The Polish product list is rebuilt once a week, not on every push.
+      - id: off-cache
+        uses: actions/cache@v4
+        with:
+          path: app/data/off-pl.json
+          key: off-pl-${{ steps.week.outputs.week }}
+      - if: steps.off-cache.outputs.cache-hit != 'true'
+        run: python3 tools/build_off_pl.py app/data/off-pl.json
+        continue-on-error: true # without the list the app falls back to online search
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:

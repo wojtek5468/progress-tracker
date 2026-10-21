@@ -71,7 +71,71 @@ function averageActiveKcal(logs, days = 30) {
   return complete.length >= 14 ? complete.reduce((s, l) => s + l.activeKcal, 0) / complete.length : null;
 }
 
-export function computeTargets(profile, logs) {
+// Exponentially smoothed weight (about a 10-day memory), like the trend line in Happy Scale or MacroFactor.
+// Daily scale readings swing 1–2 kg with water and food; the trend shows the real direction.
+const TREND_ALPHA = 0.1;
+const dayMs = 864e5;
+const dayNum = (iso) => Math.round(new Date(`${iso}T00:00:00Z`).getTime() / dayMs);
+
+export function weightTrend(points) {
+  const byDay = new Map();
+  for (const p of points) {
+    if (!(p.value > 0)) continue;
+    const list = byDay.get(p.date) ?? [];
+    list.push(p.value);
+    byDay.set(p.date, list);
+  }
+  const days = [...byDay].sort(([a], [b]) => a.localeCompare(b));
+  let trend = null;
+  let prev = null;
+  return days.map(([date, values]) => {
+    const value = values.reduce((a, b) => a + b, 0) / values.length;
+    if (trend == null) trend = value;
+    else {
+      const gap = Math.max(1, dayNum(date) - dayNum(prev));
+      trend += (1 - (1 - TREND_ALPHA) ** gap) * (value - trend);
+    }
+    prev = date;
+    return { date, value, trend: Math.round(trend * 100) / 100 };
+  });
+}
+
+// Weekly change of the trend over the last `days` days, in kg (negative = losing).
+export function trendRate(trend, days = 21) {
+  if (trend.length < 2) return null;
+  const last = trend.at(-1);
+  const from = [...trend].reverse().find((p) => dayNum(last.date) - dayNum(p.date) >= days) ?? trend[0];
+  const span = dayNum(last.date) - dayNum(from.date);
+  return span >= 7 ? (last.trend - from.trend) / span * 7 : null;
+}
+
+// Energy expenditure measured from your own data: average intake minus the energy
+// stored or lost, read from the slope of the weigh-ins (7700 kcal per kg, Hall 2008 simplification).
+// Needs at least two weeks between weigh-ins and food logged on most of those days.
+export const ADAPTIVE_MIN_DAYS = 14;
+export function adaptiveTdee(trend, intakeByDate, today, windowDays = 28) {
+  const end = dayNum(today) - 1;
+  const inWindow = trend.filter((p) => dayNum(p.date) <= end && dayNum(p.date) >= end - windowDays);
+  const first = inWindow[0];
+  const last = inWindow.at(-1);
+  const span = first && last ? dayNum(last.date) - dayNum(first.date) : 0;
+  const intake = Object.entries(intakeByDate)
+    .filter(([d, kcal]) => kcal > 0 && first && dayNum(d) >= dayNum(first.date) && dayNum(d) <= dayNum(last.date))
+    .map(([, kcal]) => kcal);
+  const status = { span, weighIns: inWindow.length, intakeDays: intake.length };
+  if (span < ADAPTIVE_MIN_DAYS || inWindow.length < 4 || intake.length < Math.max(10, span * 0.6)) return { ...status, tdee: null };
+  const avgIntake = intake.reduce((a, b) => a + b, 0) / intake.length;
+  // Least-squares slope of the daily weights: unbiased, unlike the lagging trend line.
+  const xs = inWindow.map((p) => dayNum(p.date));
+  const mx = xs.reduce((a, b) => a + b, 0) / xs.length;
+  const my = inWindow.reduce((a, p) => a + p.value, 0) / xs.length;
+  const slope = inWindow.reduce((a, p, i) => a + (xs[i] - mx) * (p.value - my), 0) / xs.reduce((a, x) => a + (x - mx) ** 2, 0);
+  const changeKg = slope * span;
+  const tdee = avgIntake - changeKg * KCAL_PER_KG_FAT / span;
+  return { ...status, avgIntake: Math.round(avgIntake), changeKg: Math.round(changeKg * 100) / 100, tdee: tdee > 1000 && tdee < 6000 ? round(tdee, 10) : null };
+}
+
+export function computeTargets(profile, logs, adaptive = null) {
   const { weightKg: w, heightCm: h, sex } = profile;
   const age = ageFrom(profile.birthDate) ?? (profile.birthYear ? new Date().getFullYear() - profile.birthYear : null);
   if (!w || !h || !age || !sex) return null;
@@ -81,7 +145,9 @@ export function computeTargets(profile, logs) {
   const measured = profile.activitySource !== 'manual' ? averageActiveKcal(logs) : null;
   const pal = ACTIVITY[profile.activityLevel ?? 'light']?.[1] ?? 1.375;
   // Measured activity plus ~10% thermic effect of food, otherwise a PAL multiplier.
-  const tdee = measured != null ? (bmr + measured) * 1.1 : bmr * pal;
+  const formulaTdee = measured != null ? (bmr + measured) * 1.1 : bmr * pal;
+  const useAdaptive = profile.tdeeMode === 'adaptive' && adaptive?.tdee;
+  const tdee = useAdaptive ? adaptive.tdee : formulaTdee;
 
   const goal = profile.goal ?? 'reduction';
   const ratePct = profile.weeklyRatePct ?? (goal === 'gain' ? 0.25 : 0.5);
@@ -108,7 +174,7 @@ export function computeTargets(profile, logs) {
   const carbs = Math.max(0, round((kcal - protein * 4 - fat * 9) / 4, 5));
 
   return {
-    age, bmr: Math.round(bmr), tdee: round(tdee, 50), measuredActiveKcal: measured != null ? Math.round(measured) : null,
+    age, bmr: Math.round(bmr), tdee: round(tdee, 50), formulaTdee: round(formulaTdee, 50), adaptive: useAdaptive ? adaptive : null, measuredActiveKcal: measured != null ? Math.round(measured) : null,
     goal, ratePct, kcal, protein, fat, carbs, ffm: ffm ? Math.round(ffm * 10) / 10 : null,
     proteinBasis,
     perMealProtein: round(0.25 * w, 5),

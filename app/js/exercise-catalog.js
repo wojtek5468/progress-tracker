@@ -293,4 +293,11 @@ export const CATALOG = {
   'thoracic-rotation': e('Rotacje odcinka piersiowego', 'Mobilność', 'Leżąc bokiem z ugiętymi kolanami, otwieraj górną rękę na drugą stronę, podążając wzrokiem za dłonią.'),
   'child-pose': e('Pozycja dziecka', 'Mobilność', 'Z klęku usiądź na piętach i wyciągnij ręce daleko przed siebie, oddychaj w dolną część pleców.'),
   'glute-kickback-cable': e('Odwodzenie nogi w tył na wyciągu', 'Nogi', 'Mankiet na kostce, prostuj biodro odprowadzając nogę w tył, bez wyginania lędźwi. Ćwiczy pośladki.'),
+  'sumo-squat-db': e('Przysiad sumo z hantlem', 'Nogi', 'Szeroki rozkrok, palce na zewnątrz, hantel trzymany pionowo między nogami; zejście z prostymi plecami. Pośladki i przywodziciele.'),
+  'clamshell-band': e('Muszelki z gumą', 'Nogi', 'Leżąc bokiem z ugiętymi kolanami i gumą nad kolanami, unoś górne kolano bez odchylania miednicy. Pośladek średni.'),
+  'donkey-kick': e('Wypychanie nogi w tył w klęku', 'Nogi', 'W klęku podpartym wypychaj zgiętą nogę stopą do sufitu, bez wyginania lędźwi. Z gumą lub obciążnikiem trudniej.'),
+  'sl-glute-bridge': e('Mostek biodrowy na jednej nodze', 'Nogi', 'Mostek z jedną nogą uniesioną; biodra równo, spięcie pośladka pracującej nogi na górze.'),
+  'band-pull-apart': e('Rozciąganie gumy przed sobą', 'Barki', 'Proste ręce na wysokości barków, rozciągaj gumę do klatki, ściągając łopatki. Tył barków i postawa.'),
+  'band-row': e('Wiosłowanie z gumą', 'Plecy', 'Guma zaczepiona na wysokości pasa, przyciągaj końce do brzucha, łokcie blisko tułowia, łopatki do tyłu.'),
+  'cable-pull-through': e('Przeciąganie liny między nogami (pull-through)', 'Nogi', 'Tyłem do wyciągu, lina między nogami; ruch z bioder jak w RDL, na górze mocne spięcie pośladków.'),
 };

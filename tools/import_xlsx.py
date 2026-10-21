@@ -220,9 +220,9 @@ def classify_week(sheet):
 
 
 PROGRAMS = {
-    "blok-1": "Blok 1 (z trenerem)",
-    "blok-2": "Blok 2.0",
-    "solo": "SOLO",
+    "blok-1": "Cykl roczny (35 tyg.)",
+    "blok-2": "Powrót do siły (3 tyg.)",
+    "solo": "Siła + kondycja (2 tyg.)",
 }
 
 
