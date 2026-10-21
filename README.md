@@ -18,6 +18,16 @@ Instalacja na iPhonie: otwórz adres aplikacji w Safari → Udostępnij → „D
 Ikony interfejsu: [Lucide](https://lucide.dev) (licencja ISC, `app/vendor/lucide/LICENSE`). Ikona aplikacji jest własna (`app/icons/icon.svg`).
 Skaner kodów kreskowych: [ZXing](https://github.com/zxing-js/library) 0.21.3 (licencja Apache 2.0, `app/vendor/zxing/LICENSE`), wczytywany dopiero po stuknięciu „Skanuj”.
 
+## Testy
+
+Obliczenia (1RM, talerze, rozgrzewka, progresja, makro, cel z terminem, trend wagi, wyszukiwanie, miary domowe, import z Hevy/Strong, plany w linku, migracje danych) mają testy w `tests/`:
+
+```sh
+npm test
+```
+
+Działają na Node 22 bez instalowania zależności; GitHub uruchamia je przy każdym PR.
+
 ## Import danych z arkusza
 
 ```sh

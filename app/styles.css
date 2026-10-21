@@ -338,3 +338,71 @@ code { font-size: 13px; background: var(--bg); padding: 1px 5px; border-radius: 
 .bar.vol i { position: absolute; top: 0; bottom: 0; background: var(--accent-soft); border-left: 1px dashed var(--accent); border-right: 1px dashed var(--accent); }
 .bar.vol span { position: relative; }
 .bar.vol > span { background: var(--accent); opacity: .85; }
+
+/* Today: one main action, kcal/protein rings, quick actions */
+.rings { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; color: inherit; text-decoration: none; }
+.ring { position: relative; display: grid; justify-items: center; }
+.ring svg { width: 116px; height: 116px; }
+.ring circle { fill: none; stroke-width: 8; stroke-linecap: round; }
+.ring circle.track { stroke: var(--bg); }
+.ring-text { position: absolute; top: 0; height: 116px; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+.ring-text b { font-size: 22px; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+.ring-text span { font-size: 12px; color: var(--muted); }
+.ring-label { margin-top: 4px; font-size: 13px; font-weight: 600; color: var(--muted); }
+.quick { display: flex; gap: 8px; margin-bottom: 12px; }
+.quick a {
+  flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 10px 4px;
+  border-radius: 12px; background: var(--card); color: var(--accent); text-decoration: none; font-size: 13px; font-weight: 600;
+}
+.stats.three { grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.stats.three .stat { padding: 12px; }
+.stats.three .value { font-size: 20px; }
+.notice { background: var(--accent-soft); }
+.notice p { color: var(--text); }
+.notice-actions { display: grid; grid-template-columns: 2fr 1fr; gap: 8px; margin-top: 12px; }
+.notice-actions .btn { min-height: 44px; }
+
+/* Logger: warm-up sets and plate calculator */
+.set-row.warmup .set-no { color: var(--accent); }
+.set-row.warmup input { font-size: 15px; }
+.chip.warmup { color: var(--muted); }
+.plates { margin-top: 10px; }
+.rest-bar #rest-more { padding: 8px 10px; }
+.icon-xs { width: 14px; height: 14px; vertical-align: -2px; }
+.fav { color: var(--fat); fill: var(--fat); }
+.muted a { color: var(--accent); }
+.hint { margin-top: 6px; color: var(--good); font-weight: 500; }
+.weekdays { justify-content: space-between; gap: 4px; }
+.weekdays label { flex: 1; }
+.weekdays input { display: none; }
+.weekdays span { display: grid; place-items: center; min-height: 36px; border-radius: 9px; background: var(--bg); font-size: 14px; font-weight: 600; color: var(--muted); }
+.weekdays input:checked + span { background: var(--accent); color: #fff; }
+.proposal { align-items: flex-start; }
+.proposal .icon-sm, .proposal input { margin-top: 2px; }
+a.link-btn { text-decoration: none; }
+
+/* Supersets */
+.ss { display: inline-grid; place-items: center; min-width: 22px; height: 22px; padding: 0 5px; border-radius: 6px; background: var(--carbs); color: #fff; font-size: 12px; font-weight: 700; vertical-align: 2px; }
+.log-card.superset { border-left: 4px solid var(--carbs); }
+.ss-title { color: var(--carbs); text-transform: none; letter-spacing: 0; }
+.icon-btn.on { background: var(--carbs); color: #fff; }
+
+/* First start */
+.choice { display: grid; gap: 8px; }
+.choice.row4 { grid-template-columns: repeat(4, 1fr); }
+.choice input { display: none; }
+.choice span { display: flex; align-items: center; justify-content: center; min-height: 48px; padding: 0 12px; border-radius: 12px; background: var(--card); font-weight: 500; text-align: center; }
+.choice input:checked + span { background: var(--accent); color: #fff; font-weight: 600; }
+
+/* Household measures and quick text entry */
+.measures { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 4px 12px; }
+.measures button { border: 0; border-radius: 8px; padding: 6px 10px; background: var(--card); color: var(--accent); font: inherit; font-size: 14px; font-weight: 500; }
+.error-text { color: #ff3b30; }
+.line-pick { display: grid; grid-template-columns: 1fr 64px auto 64px; gap: 6px; align-items: center; }
+.text-lines .row.stacked { flex-direction: column; align-items: stretch; gap: 6px; }
+.text-lines .row.stacked > span { font-size: 13px; color: var(--muted); }
+.line-pick select, .line-pick input { width: 100%; min-width: 0; min-height: 36px; border: 0; border-radius: 8px; padding: 6px 8px; background: var(--bg); color: var(--text); font: inherit; font-size: 15px; }
+.line-pick input { text-align: right; }
+.line-pick b { text-align: right; }
+.log-actions { flex-wrap: wrap; column-gap: 16px; row-gap: 0; }
+.log-actions .link-btn { white-space: nowrap; }

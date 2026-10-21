@@ -1,4 +1,4 @@
-# Model danych (schemaVersion 1)
+# Model danych (schemaVersion 2)
 
 Jeden plik JSON. Ten sam kształt będzie przechowywany w IndexedDB w PWA, a później zmapowany 1:1 na modele SwiftData.
 Pola puste są pomijane. Jednostki: kg, cm, sekundy, minuty snu, daty ISO `YYYY-MM-DD`.
@@ -15,13 +15,14 @@ Pola puste są pomijane. Jednostki: kg, cm, sekundy, minuty snu, daty ISO `YYYY-
 | `exercises[]` | `{id, name, uses}`; `id` to slug, nazwy głównych bojów ujednolicone (np. Back SQ/Back squad → Back squat) | wszystkie tygodnie |
 | `oneRepMaxes[]` | `{exerciseId, date, weightKg, reps, estimated1RM, source}` | MAX |
 | `programs[]` | `{id, name, weeks[]}`; tydzień: `{id, number, label, sourceSheet, sessions[]}` | arkusze tygodni |
-| sesja | `{order, blocks[{type: warmup/main/cooldown, items[]}]}` | |
+| sesja | `{order, blocks[{type: warmup/main/cooldown, items[]}]}`; kolejne pozycje z tym samym `group` to superseria | |
 | pozycja planu | `exerciseId, percent1RM (0–1), rir, plannedKg, actualKg, loadText, reps, repsText, sets, tempo, restSec, notes, importFlags` | |
 | `dailyLogs[]` | `{date, steps, sleepMin, restingHr, activeKcal, training, kcal}` | Pomiary, Zdrowie |
 | `bodyMeasurements[]` | `{date, weightKg, bodyFatPct, leanMassKg}` | Zdrowie |
 | `healthWorkouts[]` | `{start, type, durationMin, activeKcal, source}` | Zdrowie |
 | `ptSessions[]` | `{card, sessionDates[]}` | Karty treningowe |
-| `workoutLogs[]` | wykonane treningi zapisywane w aplikacji (krok 3) | — |
+| `workoutLogs[]` | wykonane treningi zapisywane w aplikacji: `{id, date, sessionKey, title, durationMin, volumeKg, records[], entries[{exerciseId, note, sets[{kg, reps, rir, warmup}]}]}`; serie z `warmup: true` to rozgrzewka (nie liczą się do objętości ani rekordów) | — |
+| `foods[]` | zapisane produkty `{id, source (custom/off/usda/basic/recipe), code, name, brand, per100{kcal,p,f,c}, servingG, lastUsed, favorite}` | — |
 
 ## Programy
 
@@ -64,3 +65,14 @@ python3 tools/export_templates.py data/seed.json app/js/plan-templates-coach.js
 | `dailyLogs[].sleepMin`, `.restingHr` | | Also written by the Shortcut paste (`sen=7,2 tetno=58`); `waga=`/`tluszcz=` go to `bodyMeasurements`. |
 
 Programs copied from ready-made plans (`app/js/plan-templates.js`) carry `templateId`. Templates have `audience` (`all`/`women`/`men`); coach templates carry full `weeks` instead of a 4-week RIR progression.
+
+## Wersje
+
+Aplikacja wczytuje pliki z wersją równą lub starszą od swojej i podnosi je krokami z `app/js/migrate.js`.
+Plik z nowszej wersji jest odrzucany, żeby stara kopia aplikacji nie zgubiła pól, których nie zna.
+`tools/import_xlsx.py` nadal tworzy wersję 1; aplikacja sama ją zaktualizuje.
+
+- 1 → 2: jedno wyszukiwanie produktów (usunięte `settings.foodTab`), nowe opcjonalne pola `warmup` w seriach i `favorite` w produktach.
+
+Pola dodane w wersji 2 bez migracji (opcjonalne): `profile.goalWeightKg`, `profile.goalDate`, `profile.carbCycling`, `profile.trainingDays[]` (1 = poniedziałek),
+`settings.lastReviewDate`, `settings.autoProgression`, `settings.restSound`, `settings.barKg`, `settings.plates[]`, `workoutLogs[].importKey` (trening z Hevy/Strong), pozycja planu `group` (superseria).
