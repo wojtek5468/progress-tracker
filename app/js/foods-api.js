@@ -58,3 +58,43 @@ export async function searchUsda(query, apiKey) {
     return per100.kcal == null ? null : { source: 'usda', code: String(f.fdcId), name: nameToPolish(f.description), original: f.description, brand: null, per100 };
   }).filter(Boolean);
 }
+
+// Adds or completes a product in Open Food Facts with the user's own OFF account
+// (https://world.openfoodfacts.org, free). Contributions are published under ODbL.
+// Returns true when OFF confirmed the save; null when the browser could not read the reply.
+export async function submitToOff(food, { user, password }) {
+  const body = new URLSearchParams({
+    code: food.code,
+    user_id: user,
+    password,
+    lang: 'pl',
+    product_name: food.name,
+    countries: 'en:poland',
+    nutrition_data_per: '100g',
+    'nutriment_energy-kcal': String(food.per100.kcal),
+    'nutriment_energy-kcal_unit': 'kcal',
+    nutriment_proteins: String(food.per100.p),
+    nutriment_proteins_unit: 'g',
+    nutriment_fat: String(food.per100.f),
+    nutriment_fat_unit: 'g',
+    nutriment_carbohydrates: String(food.per100.c),
+    nutriment_carbohydrates_unit: 'g',
+    comment: 'Progress Tracker (PWA)',
+  });
+  if (food.brand) body.set('brands', food.brand);
+  if (food.servingG) body.set('serving_size', `${food.servingG} g`);
+  const url = 'https://world.openfoodfacts.org/cgi/product_jqm2.pl';
+  let res;
+  try {
+    res = await fetch(url, { method: 'POST', body });
+  } catch {
+    // Some browsers block reading the reply (CORS); the form is still delivered.
+    await fetch(url, { method: 'POST', body, mode: 'no-cors' });
+    return null;
+  }
+  if (!res.ok) throw new Error(`Open Food Facts odpowiedział błędem ${res.status}.`);
+  const json = await res.json().catch(() => null);
+  if (json && json.status !== 1) throw new Error(json.status_verbose === 'user not signed-in' || /password|login/i.test(json.status_verbose ?? '')
+    ? 'Zły login lub hasło do Open Food Facts.' : `Open Food Facts: ${json.status_verbose ?? 'nie zapisano'}.`);
+  return json ? true : null;
+}

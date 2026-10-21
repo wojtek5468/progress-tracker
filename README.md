@@ -35,3 +35,14 @@ Wynik (`data/seed.json`) zawiera dane osobiste, dlatego `data/` jest w `.gitigno
 Aplikacja wczytuje ten plik przez ekran importu i trzyma dane lokalnie na telefonie.
 
 Opis formatu: [docs/data-model.md](docs/data-model.md).
+
+## Polska baza produktów (offline)
+
+Przy każdym wdrożeniu (i co poniedziałek) workflow `pages.yml` uruchamia `tools/build_off_pl.py`, który z eksportu
+[Open Food Facts](https://world.openfoodfacts.org) wybiera produkty sprzedawane w Polsce (także marki własne sieci)
+i zapisuje je w `app/data/off-pl.json`. Plik nie jest w repozytorium; buduje się na GitHubie i jest cache'owany przez tydzień.
+Dane: Open Food Facts, licencja [ODbL 1.0](https://opendatacommons.org/licenses/odbl/1-0/). Zakładka „Ze sklepu” szuka najpierw w tym pliku
+(offline), a gdy nic nie znajdzie, w API Open Food Facts.
+
+Produkty dodane ręcznie (z kodem kreskowym) można z ekranu produktu wysłać do Open Food Facts z własnego, darmowego konta OFF.
+Login zostaje w IndexedDB na telefonie i nie trafia do kopii zapasowej.

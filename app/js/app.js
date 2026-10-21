@@ -2,9 +2,10 @@ import { icon } from './icons.js';
 import * as db from './db.js';
 import { CATALOG, CATEGORIES } from './exercise-catalog.js';
 import { computeTargets, SOURCES, GOALS, ACTIVITY, weightTrend, trendRate, adaptiveTdee, ADAPTIVE_MIN_DAYS } from './nutrition.js';
-import { searchOff, searchUsda, lookupBarcode } from './foods-api.js';
+import { searchOff, searchUsda, lookupBarcode, submitToOff } from './foods-api.js';
 import { TEMPLATES, PLACES, AUDIENCES, forAudience, buildProgram, templateExerciseIds, templatePreview } from './plan-templates.js';
 import { scanBarcode } from './scanner.js';
+import { loadLocal, searchLocal, localByCode } from './off-local.js';
 import { RECIPES, INGREDIENTS, recipeTotals, recipePer100, isVege } from './recipes.js';
 
 const MEALS = { breakfast: 'Śniadanie', lunch: 'Obiad', dinner: 'Kolacja', snack: 'Przekąski' };
@@ -1499,11 +1500,12 @@ function viewDiet(date = todayIso()) {
 function viewFoodAdd(date, meal) {
   const state = { tab: data.settings.foodTab ?? 'mine', results: [], error: null, loading: false, query: '' };
   const label = MEALS[meal] ?? 'Posiłek';
+  loadLocal();
 
   const resultRow = (f, i) => `
     <button type="button" class="row food-row" data-pick="${i}">
       <div class="grow"><div class="title">${esc(f.name)}</div>
-      <div class="sub">${f.brand ? `${esc(f.brand)} · ` : ''}${fmt(f.per100.kcal)} kcal · B ${fmt(f.per100.p, 1)} · T ${fmt(f.per100.f, 1)} · W ${fmt(f.per100.c, 1)} /100 g</div></div>
+      <div class="sub">${f.brand ? `${esc(f.brand)} · ` : ''}${f.stores ? `${esc(f.stores)} · ` : ''}${fmt(f.per100.kcal)} kcal · B ${fmt(f.per100.p, 1)} · T ${fmt(f.per100.f, 1)} · W ${fmt(f.per100.c, 1)} /100 g</div></div>
       ${icon('plus', 'icon-sm')}
     </button>`;
 
@@ -1533,10 +1535,11 @@ function viewFoodAdd(date, meal) {
     if (state.error) return `<p class="error-box">${esc(state.error)}</p>`;
     if (!state.query) {
       return `<p class="muted small" style="margin:8px 4px">${state.tab === 'off'
-        ? 'Produkty ze sklepów z bazy Open Food Facts. Wpisz nazwę lub kod kreskowy i stuknij Szukaj.'
+        ? 'Produkty ze sklepów z bazy Open Food Facts, także marki Lidla, Biedronki czy Auchan. Wpisz nazwę, markę lub sklep (np. „jogurt pilos”) albo zeskanuj kod.'
         : 'Produkty podstawowe z bazy USDA, np. „pierś z kurczaka surowa”, „ryż biały gotowany”. Nazwy tłumaczymy automatycznie; po dodaniu możesz je poprawić.'}</p>`;
     }
-    return state.results.length ? `<div class="list">${state.results.map(resultRow).join('')}</div>`
+    return state.results.length ? `<div class="list">${state.results.map(resultRow).join('')}</div>
+      ${state.local ? '<button type="button" class="link-btn" id="online-search" style="margin:4px">Nie ma? Szukaj też w internecie</button>' : ''}`
       : '<p class="muted small" style="margin:8px 4px">Nic nie znaleziono. Spróbuj innej nazwy albo dodaj własny produkt.</p>';
   };
 
@@ -1576,6 +1579,7 @@ function viewFoodAdd(date, meal) {
       search();
     };
     document.getElementById('custom-food').onclick = () => { pendingBarcode = state.pendingCode ?? null; };
+    document.getElementById('online-search')?.addEventListener('click', () => search({ online: true }));
     document.getElementById('quick-form').onsubmit = async (ev) => {
       ev.preventDefault();
       const f = new FormData(ev.target);
@@ -1613,26 +1617,34 @@ function viewFoodAdd(date, meal) {
     };
     view.onclick = onclick;
   };
-  const search = async () => {
-      state.pendingCode = null;
-      if (state.tab === 'mine' || !state.query) return draw();
-      state.loading = true; state.error = null; draw();
-      try {
-        if (state.tab === 'off' && /^\d{8,14}$/.test(state.query)) {
-          const hit = await lookupBarcode(state.query);
-          state.results = hit ? [hit] : [];
-        } else {
-          state.results = state.tab === 'off' ? await searchOff(state.query) : await searchUsda(state.query, data.settings.usdaKey);
-        }
-      } catch (err) {
-        state.error = err.message.includes('fetch') ? 'Brak połączenia z bazą produktów.' : err.message;
+  // Shop products: the offline Polish list first (instant, works without internet),
+  // the Open Food Facts API when the list has nothing or the user asks for more.
+  const search = async ({ online = false } = {}) => {
+    state.pendingCode = null;
+    state.local = false;
+    if (state.tab === 'mine' || !state.query) return draw();
+    state.loading = true; state.error = null; draw();
+    const isCode = /^\d{8,14}$/.test(state.query);
+    try {
+      if (state.tab === 'usda') {
+        state.results = await searchUsda(state.query, data.settings.usdaKey);
+      } else if (isCode) {
+        const hit = await localByCode(state.query) ?? await lookupBarcode(state.query).catch(() => null);
+        state.results = hit ? [hit] : [];
+      } else {
+        const local = online ? [] : await searchLocal(state.query);
+        state.local = local.length > 0;
+        state.results = local.length ? local : await searchOff(state.query);
       }
-      state.loading = false;
-      if (state.tab === 'off' && /^\d{8,14}$/.test(state.query) && !state.results.length && !state.error) {
-        state.error = `Produktu z kodem ${state.query} nie ma jeszcze w Open Food Facts. Dodaj go jako własny produkt, a następnym razem skaner znajdzie go w „Moich”.`;
-        state.pendingCode = state.query;
-      }
-      draw();
+    } catch (err) {
+      state.error = err.message.includes('fetch') ? 'Brak połączenia z bazą produktów.' : err.message;
+    }
+    state.loading = false;
+    if (state.tab === 'off' && isCode && !state.results.length && !state.error) {
+      state.error = `Produktu z kodem ${state.query} nie ma jeszcze w Open Food Facts. Dodaj go jako własny produkt (z etykiety), a potem możesz go wysłać do bazy, żeby znajomi też go znaleźli.`;
+      state.pendingCode = state.query;
+    }
+    draw();
   };
   const onclick = async (ev) => {
     const tab = ev.target.closest('[data-tab]');
@@ -1712,11 +1724,11 @@ function viewFood(idOrNew, date, meal) {
   const inUse = isNew ? 0 : Object.values(data.foodLog).flat().filter((e) => e.foodId === food.id).length;
   const input = (name, label, value, mode = 'decimal') => `<label class="row"><span class="grow">${label}</span><input name="${name}" inputmode="${mode}" value="${esc(value ?? '')}"></label>`;
   render(isNew ? 'Własny produkt' : 'Produkt', `
-    ${isNew && pendingBarcode ? `<p class="muted small" style="margin:0 4px 12px">Kod kreskowy ${esc(pendingBarcode)} zostanie zapisany z produktem.</p>` : ''}
     <form id="food-form">
       <div class="list form">
         <label class="row stacked"><span>Nazwa</span><input name="name" value="${esc(food.name)}" required></label>
         <label class="row stacked"><span>Marka (opcjonalnie)</span><input name="brand" value="${esc(food.brand ?? '')}"></label>
+        ${food.source === 'custom' || isNew ? `<label class="row stacked"><span>Kod kreskowy (opcjonalnie)</span><input name="code" inputmode="numeric" value="${esc(food.code ?? (isNew ? pendingBarcode ?? '' : ''))}" placeholder="13 cyfr spod kodu"></label>` : ''}
       </div>
       <div class="section-title">Wartości na 100 g</div>
       <div class="list form">
@@ -1729,8 +1741,10 @@ function viewFood(idOrNew, date, meal) {
       <p class="muted small" style="margin:0 4px 16px">Wartości przepisz z etykiety. Zmiana przelicza też wcześniejsze wpisy z tym produktem.</p>
       <button class="btn" type="submit">${icon('check', 'icon-sm')} Zapisz</button>
     </form>
+    ${!isNew && food.source === 'custom' ? offContributeBox(food) : ''}
     ${!isNew ? `<button class="btn danger" id="delete-food" style="margin-top:12px">${icon('trash-2', 'icon-sm')} Usuń produkt</button>` : ''}
   `, { back: date ? `#/food-add/${date}/${meal}` : '#/foods' });
+  if (!isNew && food.source === 'custom') bindOffContribute(food);
   document.getElementById('food-form').onsubmit = async (ev) => {
     ev.preventDefault();
     const f = new FormData(ev.target);
@@ -1740,9 +1754,10 @@ function viewFood(idOrNew, date, meal) {
     };
     const per100 = { kcal: n('kcal'), p: n('p') ?? 0, f: n('f') ?? 0, c: n('c') ?? 0 };
     if (!(per100.kcal >= 0) || per100.kcal == null) { alert('Podaj kalorie na 100 g.'); return; }
-    const values = { name: String(f.get('name')).trim(), brand: String(f.get('brand')).trim() || null, per100, servingG: n('servingG') };
+    const code = String(f.get('code') ?? '').replace(/\D/g, '');
+    const values = { name: String(f.get('name')).trim(), brand: String(f.get('brand')).trim() || null, per100, servingG: n('servingG'), ...(code ? { code } : {}) };
     if (isNew) {
-      const saved = saveFood({ source: 'custom', ...values, ...(pendingBarcode ? { code: pendingBarcode } : {}) });
+      const saved = saveFood({ source: 'custom', ...values });
       pendingBarcode = null;
       await save();
       location.hash = date ? `#/entry/${date}/new-${meal}-${saved.id}` : '#/foods';
@@ -1761,6 +1776,52 @@ function viewFood(idOrNew, date, meal) {
     await save();
     location.hash = '#/foods';
   });
+}
+
+// "Wyślij do Open Food Facts": share a product typed from the label so the next person can scan it.
+function offContributeBox(food) {
+  if (food.offSentAt) {
+    return `<p class="muted small" style="margin:16px 4px">Wysłano do Open Food Facts ${dateLabel(food.offSentAt)}. Dzięki temu inni znajdą go skanerem.</p>`;
+  }
+  return `<details class="list" style="margin-top:16px" id="off-box">
+    <summary><span class="grow">Wyślij do Open Food Facts</span><span class="chev">${icon('chevron-right', 'icon-sm')}</span></summary>
+    <form id="off-form" class="form">
+      <p class="small muted" style="margin:8px 16px">Produkt trafi do otwartej bazy, z której korzysta ta aplikacja, i zobaczą go wszyscy (licencja ODbL). Potrzebne jest darmowe konto: <a href="https://world.openfoodfacts.org/cgi/user.pl" target="_blank" rel="noopener">załóż je tutaj</a>.</p>
+      ${food.code ? '' : '<p class="error-box" style="margin:0 16px 8px">Najpierw wpisz kod kreskowy produktu i zapisz.</p>'}
+      <label class="row stacked"><span>Login Open Food Facts</span><input name="user" autocomplete="username" id="off-user"></label>
+      <label class="row stacked"><span>Hasło</span><input name="password" type="password" autocomplete="current-password" id="off-pass"></label>
+      <label class="row"><span class="grow small">Wartości przepisałem z etykiety tego produktu</span><input type="checkbox" name="confirm" required style="width:auto"></label>
+      <div class="row"><button class="btn" type="submit" ${food.code ? '' : 'disabled'}>Wyślij</button></div>
+      <p class="small muted" style="margin:0 16px 12px">Login i hasło zostają tylko na tym telefonie, poza kopią zapasową.</p>
+    </form>
+  </details>`;
+}
+
+async function bindOffContribute(food) {
+  const form = document.getElementById('off-form');
+  if (!form) return;
+  const account = await db.get('offAccount');
+  if (account) { form.user.value = account.user; form.password.value = account.password; }
+  form.onsubmit = async (ev) => {
+    ev.preventDefault();
+    const creds = { user: form.user.value.trim(), password: form.password.value };
+    if (!creds.user || !creds.password) return;
+    const btn = form.querySelector('button');
+    btn.disabled = true;
+    btn.textContent = 'Wysyłam…';
+    try {
+      const confirmed = await submitToOff(food, creds);
+      await db.set('offAccount', creds);
+      food.offSentAt = todayIso();
+      await save();
+      alert(confirmed ? 'Zapisane w Open Food Facts. Dziękuję!' : 'Wysłane do Open Food Facts. Produkt pojawi się w bazie po chwili.');
+      route();
+    } catch (err) {
+      btn.disabled = false;
+      btn.textContent = 'Wyślij';
+      alert(err.message.includes('fetch') ? 'Brak połączenia z Open Food Facts. Spróbuj później.' : err.message);
+    }
+  };
 }
 
 function viewFoods() {
