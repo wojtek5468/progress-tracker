@@ -2,6 +2,11 @@ import { icon } from './icons.js';
 import * as db from './db.js';
 import { CATALOG, CATEGORIES } from './exercise-catalog.js';
 import { computeTargets, SOURCES, GOALS, ACTIVITY } from './nutrition.js';
+import { searchOff, searchUsda, lookupBarcode } from './foods-api.js';
+import { TEMPLATES, buildProgram, templateExerciseIds } from './plan-templates.js';
+import { RECIPES, INGREDIENTS, recipeTotals, recipePer100 } from './recipes.js';
+
+const MEALS = { breakfast: 'Śniadanie', lunch: 'Obiad', dinner: 'Kolacja', snack: 'Przekąski' };
 
 const SCHEMA_VERSION = 1;
 const view = document.getElementById('view');
@@ -45,6 +50,11 @@ function migrate(d) {
   d.workoutLogs ??= [];
   d.oneRepMaxes ??= [];
   d.exercises ??= [];
+  d.programs ??= [];
+  d.dailyLogs ??= [];
+  d.foods ??= [];
+  d.mealTemplates ??= [];
+  d.foodLog ??= {};
   const p = (d.profile ??= {});
   const lastBody = [...(d.bodyMeasurements ?? [])].reverse().find((m) => m.bodyFatPct);
   p.bodyFatPct ??= lastBody?.bodyFatPct ?? null;
@@ -138,7 +148,17 @@ function viewEmpty() {
       <h2>Wczytaj swoje dane</h2>
       <p>Wybierz plik <b>seed.json</b>. Dane zostają tylko na tym telefonie.</p>
       <label class="btn">${icon('upload', 'icon-sm')} Wybierz plik<input type="file" accept="application/json,.json" id="import"></label>
+      <button class="btn secondary" id="start-fresh" style="margin-top:10px">Zacznij od zera</button>
     </div>`);
+  document.getElementById('start-fresh').onclick = async () => {
+    const blank = { schemaVersion: SCHEMA_VERSION, programs: [], exercises: [], profile: {}, dailyLogs: [], bodyMeasurements: [], settings: {} };
+    await db.set('data', blank);
+    await db.persist();
+    setData(blank);
+    location.hash = '#/profile';
+    route();
+  };
+
   bindImport();
 }
 
@@ -152,11 +172,15 @@ async function viewToday() {
   const kcal = targets()?.kcal;
   const today = new Date().toLocaleDateString('pl-PL', { weekday: 'long', day: 'numeric', month: 'long' });
   const lastLog = data.workoutLogs.at(-1);
+  const stepsToday = dayLog(todayIso())?.steps ?? null;
+  const eaten = sumMacros(dayEntries(todayIso()));
 
   let hero;
   if (!cw) {
-    hero = `<div class="card hero"><h2>Nie masz jeszcze planu</h2><p>Utwórz kategorię i pierwszy tydzień treningów.</p>
-      <a class="btn" href="#/plans">${icon('plus', 'icon-sm')} Utwórz plan</a></div>`;
+    hero = `<div class="card hero"><h2>Nie masz jeszcze planu</h2><p>Wybierz gotowy plan i dopasuj go do siebie albo ułóż własny.</p>
+      <a class="btn" href="#/templates">${icon('calendar-days', 'icon-sm')} Gotowe plany</a>
+      <a class="btn secondary" style="margin-top:8px" href="#/plans">${icon('plus', 'icon-sm')} Własny plan</a></div>`;
+
   } else {
     const { program, week } = cw;
     const next = nextSession(program, week);
@@ -177,12 +201,17 @@ async function viewToday() {
     ${lastLog ? `<a class="list row" href="#/history/${lastLog.id}">${icon('check', 'icon-sm')}
       <div class="grow"><div class="title">Ostatni trening</div><div class="sub">${dateLabel(lastLog.date)} · ${esc(lastLog.title)}</div></div>
       <span class="chev">${icon('chevron-right', 'icon-sm')}</span></a>` : ''}
-    <div class="section-title">Ostatnie 7 dni</div>
+    <div class="section-title">Podsumowanie</div>
     <div class="stats">
-      <div class="stat"><div class="label">${icon('footprints', 'icon-sm')} Kroki</div><div class="value">${fmt(steps7)}</div></div>
+      <a class="stat" href="#/steps"><div class="label">${icon('footprints', 'icon-sm')} Kroki dziś</div><div class="value">${fmt(stepsToday)}</div>
+        <div class="bar thin"><span style="width:${Math.min(100, Math.round((stepsToday ?? 0) / stepsGoal() * 100))}%"></span></div>
+        <div class="sub small muted">średnio ${fmt(steps7)} · cel ${fmt(stepsGoal())}</div></a>
       <div class="stat"><div class="label">${icon('moon', 'icon-sm')} Sen</div><div class="value">${sleep7 ? `${Math.floor(sleep7 / 60)}<span class="unit">h</span> ${Math.round(sleep7 % 60)}<span class="unit">min</span>` : '–'}</div></div>
       <a class="stat" href="#/profile"><div class="label">${icon('scale', 'icon-sm')} Waga</div><div class="value">${fmt(weight, 1)}<span class="unit">kg</span></div></a>
-      <a class="stat" href="#/diet"><div class="label">${icon('flame', 'icon-sm')} Cel kcal</div><div class="value">${fmt(kcal)}</div></a>
+      <a class="stat" href="#/diet"><div class="label">${icon('flame', 'icon-sm')} Zjedzone</div><div class="value">${fmt(eaten.kcal)}<span class="unit">/ ${fmt(kcal)}</span></div>
+        <div class="bar thin"><span style="width:${kcal ? Math.min(100, Math.round(eaten.kcal / kcal * 100)) : 0}%;background:var(--accent)"></span></div>
+        <div class="sub small muted">białko ${fmt(eaten.p)} / ${fmt(targets()?.protein)} g</div></a>
+
     </div>`);
 }
 
@@ -197,7 +226,10 @@ function viewPlans(programId) {
   const tabs = `<div class="segmented" role="tablist">
     ${[...programs].reverse().map((p) => `<a role="tab" href="#/plans/${p.id}" class="${p === selected ? 'active' : ''}">${esc(p.name)}</a>`).join('')}
     <button type="button" id="new-program" aria-label="Nowa kategoria">${icon('plus', 'icon-sm')}</button>
-  </div>`;
+  </div>
+  <a class="list row" href="#/templates">${icon('calendar-days', 'icon-sm')}<div class="grow"><div class="title">Gotowe plany</div>
+    <div class="sub">FBW, 5×5, Góra/Dół, Push/Pull/Nogi, trening w domu</div></div><span class="chev">${icon('chevron-right', 'icon-sm')}</span></a>`;
+
 
   if (!selected) {
     render('Plany', `${tabs}<div class="empty">${icon('calendar-days')}<h2>Brak planów</h2><p>Dodaj pierwszą kategorię przyciskiem +.</p></div>`);
@@ -372,15 +404,16 @@ function viewSession(programId, number, order) {
   };
 }
 
-function viewDiet() {
+function viewNutrition() {
   const t = targets();
+
   const macros = t ? [
     ['Białko', t.protein, t.shares.protein, 'var(--protein)'],
     ['Tłuszcze', t.fat, t.shares.fat, 'var(--fat)'],
     ['Węglowodany', t.carbs, t.shares.carbs, 'var(--carbs)'],
   ] : [];
   const w = data.profile.weightKg;
-  render('Dieta', `
+  render('Cel i makro', `
     ${t ? `
     <div class="card">
       <p>Cel dzienny · ${GOALS[t.goal]}</p>
@@ -393,7 +426,8 @@ function viewDiet() {
             <b style="text-align:right">${g} g</b></div>
           <div class="macro-sub">${share}% energii · ${fmt(g / w, 1)} g/kg</div>`).join('')}
       </div>
-      <a class="btn secondary" style="margin-top:14px" href="#/profile">Zmień cel lub dane</a>
+           <a class="btn secondary" style="margin-top:14px" href="#/profile">Zmień cel lub dane</a>
+
     </div>
     <details class="list">
       <summary><span class="grow">Jak to policzyłem</span><span class="chev">${icon('chevron-right', 'icon-sm')}</span></summary>
@@ -427,7 +461,7 @@ function viewDiet() {
         <summary><span class="grow">${esc(s.section)}</span><span class="chev">${icon('chevron-right', 'icon-sm')}</span></summary>
         <ul>${s.items.map((i) => `<li>${esc(i)}</li>`).join('')}</ul>
       </details>`).join('')}
-  `);
+  `, { back: '#/diet' });
 }
 
 function sparkline(points, unit) {
@@ -464,6 +498,10 @@ function viewProgress() {
       <h2>${fmt(lastBody?.weightKg, 1)} kg${lastBody?.bodyFatPct ? ` <span class="muted" style="font-size:15px;font-weight:500">· ${fmt(lastBody.bodyFatPct, 1)}% tłuszczu</span>` : ''}</h2>
       ${sparkline(weights, 'kg')}
     </div>
+    <a class="card" href="#/steps" style="display:block;color:inherit;text-decoration:none">
+      <p>Kroki · ostatnie 14 dni</p>
+      ${stepBars(14)}
+    </a>
     <div class="section-title">Rekordy 1RM</div>
     <div class="list">
       ${[...best.values()].map((m) => `
@@ -497,7 +535,9 @@ function viewSettings() {
     </div>` : ''}
     <div class="section-title">Dane</div>
     <div class="list">
-      <label class="row"><span class="grow">Wczytaj plik danych</span>${icon('upload', 'icon-sm')}<input type="file" accept="application/json,.json" id="import"></label>
+      ${data ? `<a class="row" href="#/steps"><span class="grow">Kroki i Zdrowie (Skróty)</span><span class="chev">${icon('chevron-right', 'icon-sm')}</span></a>` : ''}
+      <label class="row">
+<span class="grow">Wczytaj plik danych</span>${icon('upload', 'icon-sm')}<input type="file" accept="application/json,.json" id="import"></label>
       ${data ? `<a class="row" id="export" href="#"><span class="grow">Zapisz kopię zapasową</span>${icon('download', 'icon-sm')}</a>` : ''}
     </div>
     ${data ? `<button class="btn danger" id="reset">${icon('trash-2', 'icon-sm')} Usuń dane z telefonu</button>` : ''}
@@ -906,7 +946,7 @@ function viewProfile() {
     }
     data.profile = next;
     await save();
-    location.hash = '#/diet';
+    location.hash = '#/nutrition';
   };
 }
 
@@ -995,6 +1035,603 @@ function viewExercise(rawId) {
   });
 }
 
+function foodById(id) {
+  return data.foods.find((f) => f.id === id);
+}
+
+function entryMacros(entry) {
+  const food = foodById(entry.foodId);
+  const k = (entry.grams ?? 0) / 100;
+  if (!food) return { kcal: 0, p: 0, f: 0, c: 0 };
+  return { kcal: food.per100.kcal * k, p: food.per100.p * k, f: food.per100.f * k, c: food.per100.c * k };
+}
+
+function sumMacros(entries) {
+  return entries.reduce((s, e) => {
+    const m = entryMacros(e);
+    return { kcal: s.kcal + m.kcal, p: s.p + m.p, f: s.f + m.f, c: s.c + m.c };
+  }, { kcal: 0, p: 0, f: 0, c: 0 });
+}
+
+const dayEntries = (date) => (data.foodLog[date] ??= []);
+const shiftDate = (iso, days) => {
+  const d = new Date(`${iso}T12:00:00`);
+  d.setDate(d.getDate() + days);
+  return d.toLocaleDateString('sv-SE');
+};
+
+function saveFood(food) {
+  // Reuse a product already saved from the same database entry.
+  const existing = food.code && data.foods.find((f) => f.source === food.source && f.code === food.code);
+  if (existing) return existing;
+  const saved = { id: uid('food'), ...food };
+  data.foods.push(saved);
+  return saved;
+}
+
+function viewDiet(date = todayIso()) {
+  const t = targets();
+  const entries = dayEntries(date);
+  const total = sumMacros(entries);
+  const isToday = date === todayIso();
+  const bar = (label, eaten, goal, color, unit = 'g') => {
+    const pct = goal ? Math.min(100, Math.round(eaten / goal * 100)) : 0;
+    const over = goal && eaten > goal * 1.05;
+    return `<div class="macro"><span>${label}</span>
+      <div class="bar"><span style="width:${pct}%;background:${over ? '#ff3b30' : color}"></span></div>
+      <b style="text-align:right">${fmt(eaten)}${goal ? `<span class="muted small">/${fmt(goal)}</span>` : ''}</b></div>`;
+  };
+  const left = t ? Math.round(t.kcal - total.kcal) : null;
+
+  render('Dieta', `
+    <div class="day-switch">
+      <a class="icon-btn" href="#/diet/${shiftDate(date, -1)}" aria-label="Poprzedni dzień">${icon('chevron-left', 'icon-sm')}</a>
+      <b>${isToday ? 'Dziś' : new Date(`${date}T12:00:00`).toLocaleDateString('pl-PL', { weekday: 'short', day: 'numeric', month: 'long' })}</b>
+      <a class="icon-btn" href="#/diet/${shiftDate(date, 1)}" aria-label="Następny dzień">${icon('chevron-right', 'icon-sm')}</a>
+    </div>
+    <div class="card">
+      <p>${t ? `Cel ${fmt(t.kcal)} kcal · ${GOALS[t.goal]}` : 'Uzupełnij profil, aby wyliczyć cel'}</p>
+      <h2 style="font-size:34px">${fmt(total.kcal)} <span class="muted" style="font-size:17px;font-weight:500">kcal zjedzone</span></h2>
+      ${left != null ? `<p class="small">${left >= 0 ? `Zostało ${fmt(left)} kcal` : `Przekroczono o ${fmt(-left)} kcal`}</p>` : ''}
+      <div class="macros">
+        ${bar('Białko', total.p, t?.protein, 'var(--protein)')}
+        ${bar('Tłuszcze', total.f, t?.fat, 'var(--fat)')}
+        ${bar('Węglowodany', total.c, t?.carbs, 'var(--carbs)')}
+      </div>
+    </div>
+    ${Object.entries(MEALS).map(([meal, label]) => {
+      const items = entries.filter((e) => e.meal === meal);
+      const sum = sumMacros(items);
+      return `
+      <div class="section-title meal-head"><span>${label}</span><span>${items.length ? `${fmt(sum.kcal)} kcal` : ''}</span></div>
+      <div class="list">
+        ${items.map((e) => {
+          const food = foodById(e.foodId);
+          const m = entryMacros(e);
+          return `<a class="row" href="#/entry/${date}/${e.id}">
+            <div class="grow"><div class="title">${esc(food?.name ?? 'Usunięty produkt')}</div>
+            <div class="sub">${fmt(e.grams)} g · B ${fmt(m.p)} · T ${fmt(m.f)} · W ${fmt(m.c)}</div></div>
+            <b>${fmt(m.kcal)}</b>
+          </a>`;
+        }).join('')}
+        <div class="row meal-actions">
+          <a class="link-btn" href="#/food-add/${date}/${meal}">${icon('plus', 'icon-sm')} Dodaj</a>
+          ${items.length ? `<button type="button" class="link-btn" data-save-meal="${meal}">Zapisz jako posiłek</button>` : ''}
+        </div>
+      </div>`;
+    }).join('')}
+    <div class="list" style="margin-top:20px">
+      <a class="row" href="#/nutrition"><span class="grow">Cel, makro i zalecenia</span><span class="chev">${icon('chevron-right', 'icon-sm')}</span></a>
+      <a class="row" href="#/recipes"><span class="grow">Przepisy</span><span class="sub">${RECIPES.length}</span><span class="chev">${icon('chevron-right', 'icon-sm')}</span></a>
+      <a class="row" href="#/foods"><span class="grow">Moje produkty i posiłki</span><span class="chev">${icon('chevron-right', 'icon-sm')}</span></a>
+    </div>
+  `);
+  view.onclick = async (ev) => {
+    const btn = ev.target.closest('[data-save-meal]');
+    if (!btn) return;
+    const meal = btn.dataset.saveMeal;
+    const name = prompt('Nazwa posiłku (np. „Owsianka z jagodami”)', MEALS[meal])?.trim();
+    if (!name) return;
+    data.mealTemplates.push({
+      id: uid('meal'), name,
+      items: entries.filter((e) => e.meal === meal).map((e) => ({ foodId: e.foodId, grams: e.grams })),
+    });
+    await save();
+    alert(`Zapisano „${name}”. Znajdziesz go w zakładce „Moje” przy dodawaniu.`);
+  };
+}
+
+function viewFoodAdd(date, meal) {
+  const state = { tab: data.settings.foodTab ?? 'mine', results: [], error: null, loading: false, query: '' };
+  const label = MEALS[meal] ?? 'Posiłek';
+
+  const resultRow = (f, i) => `
+    <button type="button" class="row food-row" data-pick="${i}">
+      <div class="grow"><div class="title">${esc(f.name)}</div>
+      <div class="sub">${f.brand ? `${esc(f.brand)} · ` : ''}${fmt(f.per100.kcal)} kcal · B ${fmt(f.per100.p, 1)} · T ${fmt(f.per100.f, 1)} · W ${fmt(f.per100.c, 1)} /100 g</div></div>
+      ${icon('plus', 'icon-sm')}
+    </button>`;
+
+  const mine = () => {
+    const q = state.query.toLowerCase();
+    const templates = data.mealTemplates.filter((m) => !q || m.name.toLowerCase().includes(q));
+    const foods = data.foods.filter((f) => !q || `${f.name} ${f.brand ?? ''}`.toLowerCase().includes(q))
+      .sort((a, b) => (b.lastUsed ?? '').localeCompare(a.lastUsed ?? ''));
+    state.results = foods;
+    return `
+      ${templates.length ? `<div class="section-title">Zapisane posiłki</div><div class="list">
+        ${templates.map((m) => {
+          const sum = sumMacros(m.items);
+          return `<button type="button" class="row food-row" data-template="${m.id}">
+            <div class="grow"><div class="title">${esc(m.name)}</div><div class="sub">${m.items.length} ${m.items.length === 1 ? 'produkt' : m.items.length < 5 ? 'produkty' : 'produktów'} · ${fmt(sum.kcal)} kcal</div></div>
+            ${icon('plus', 'icon-sm')}</button>`;
+        }).join('')}</div>` : ''}
+      <div class="section-title">Produkty</div>
+      ${foods.length ? `<div class="list">${foods.map(resultRow).join('')}</div>`
+        : '<p class="muted small" style="margin:0 4px">Brak zapisanych produktów. Wyszukaj w bazie lub dodaj własny.</p>'}`;
+  };
+
+  const body = () => {
+    if (state.tab === 'mine') return mine();
+    if (state.loading) return '<p class="muted" style="text-align:center;padding:24px">Szukam…</p>';
+    if (state.error) return `<p class="error-box">${esc(state.error)}</p>`;
+    if (!state.query) {
+      return `<p class="muted small" style="margin:8px 4px">${state.tab === 'off'
+        ? 'Produkty ze sklepów z bazy Open Food Facts. Wpisz nazwę lub kod kreskowy i stuknij Szukaj.'
+        : 'Produkty podstawowe z bazy USDA (nazwy po angielsku, np. „chicken breast raw”, „rice white cooked”).'}</p>`;
+    }
+    return state.results.length ? `<div class="list">${state.results.map(resultRow).join('')}</div>`
+      : '<p class="muted small" style="margin:8px 4px">Nic nie znaleziono. Spróbuj innej nazwy albo dodaj własny produkt.</p>';
+  };
+
+  const draw = () => {
+    render(`Dodaj: ${label}`, `
+      <div class="segmented">
+        ${[['mine', 'Moje'], ['off', 'Ze sklepu'], ['usda', 'Podstawowe']].map(([k, l]) => `<a href="#" data-tab="${k}" class="${state.tab === k ? 'active' : ''}">${l}</a>`).join('')}
+      </div>
+      <form class="card add-row" id="food-search">
+        <input type="search" name="q" value="${esc(state.query)}" placeholder="${state.tab === 'mine' ? 'Filtruj moje produkty…' : 'Nazwa produktu lub kod kreskowy'}" autocomplete="off" enterkeyhint="search">
+        <button class="icon-btn accent" aria-label="Szukaj">${icon('chevron-right')}</button>
+      </form>
+      <div id="food-results">${body()}</div>
+      <div class="actions">
+        <a class="btn secondary" href="#/recipes/${date}/${meal}">Z przepisu</a>
+        <a class="btn secondary" href="#/food/new/${date}/${meal}">${icon('plus', 'icon-sm')} Własny produkt</a>
+      </div>
+      ${state.tab !== 'mine' ? `<p class="muted small" style="text-align:center;margin-top:16px">Dane: ${state.tab === 'off'
+        ? '<a href="https://world.openfoodfacts.org" target="_blank" rel="noopener">Open Food Facts</a> (ODbL), wartości z etykiet wpisane przez użytkowników — sprawdź z opakowaniem.'
+        : '<a href="https://fdc.nal.usda.gov" target="_blank" rel="noopener">USDA FoodData Central</a> (domena publiczna).'}</p>` : ''}
+    `, { back: `#/diet/${date}` });
+    document.getElementById('food-search').onsubmit = async (ev) => {
+      ev.preventDefault();
+      state.query = new FormData(ev.target).get('q').trim();
+      if (state.tab === 'mine' || !state.query) return draw();
+      state.loading = true; state.error = null; draw();
+      try {
+        if (state.tab === 'off' && /^\d{8,14}$/.test(state.query)) {
+          const hit = await lookupBarcode(state.query);
+          state.results = hit ? [hit] : [];
+        } else {
+          state.results = state.tab === 'off' ? await searchOff(state.query) : await searchUsda(state.query, data.settings.usdaKey);
+        }
+      } catch (err) {
+        state.error = err.message.includes('fetch') ? 'Brak połączenia z bazą produktów.' : err.message;
+      }
+      state.loading = false;
+      draw();
+    };
+    view.onclick = onclick;
+  };
+  const onclick = async (ev) => {
+    const tab = ev.target.closest('[data-tab]');
+    const pick = ev.target.closest('[data-pick]');
+    const tpl = ev.target.closest('[data-template]');
+    if (tab) {
+      ev.preventDefault();
+      state.tab = tab.dataset.tab;
+      data.settings.foodTab = state.tab;
+      state.results = []; state.error = null;
+      if (state.tab !== 'mine') state.query = '';
+      draw();
+    } else if (pick) {
+      const food = saveFood(state.results[Number(pick.dataset.pick)]);
+      await save();
+      location.hash = `#/entry/${date}/new-${meal}-${food.id}`;
+    } else if (tpl) {
+      const m = data.mealTemplates.find((x) => x.id === tpl.dataset.template);
+      for (const it of m.items) dayEntries(date).push({ id: uid('e'), meal, foodId: it.foodId, grams: it.grams });
+      await save();
+      location.hash = `#/diet/${date}`;
+    }
+  };
+  draw();
+}
+
+function viewEntry(date, entryId) {
+  // New entries arrive as "new-<meal>-<foodId>"; existing ones by their id.
+  const isNew = entryId.startsWith('new-');
+  const [, meal, ...rest] = isNew ? entryId.split('-') : [];
+  const entry = isNew ? { meal, foodId: rest.join('-'), grams: null } : dayEntries(date).find((e) => e.id === entryId);
+  const food = entry && foodById(entry.foodId);
+  if (!food) return viewDiet(date);
+  const grams = entry.grams ?? food.servingG ?? 100;
+  const per = food.per100;
+  const calc = (g) => `${fmt(per.kcal * g / 100)} kcal · B ${fmt(per.p * g / 100, 1)} g · T ${fmt(per.f * g / 100, 1)} g · W ${fmt(per.c * g / 100, 1)} g`;
+  render(food.name, `
+    <p class="muted small" style="margin:0 4px 12px">${food.brand ? `${esc(food.brand)} · ` : ''}${fmt(per.kcal)} kcal na 100 g · ${food.source === 'off' ? 'Open Food Facts' : food.source === 'usda' ? 'USDA' : 'mój produkt'}</p>
+    <form id="entry-form">
+      <div class="list form">
+        <label class="row"><span class="grow">Ilość (g)</span><input name="grams" inputmode="decimal" value="${grams}" required autofocus></label>
+        <label class="row"><span class="grow">Posiłek</span><select name="meal">${Object.entries(MEALS).map(([k, v]) => `<option value="${k}" ${k === entry.meal ? 'selected' : ''}>${v}</option>`).join('')}</select></label>
+      </div>
+      ${food.servingG ? `<p class="muted small" style="margin:0 4px 8px">Porcja z opakowania: ${fmt(food.servingG)} g</p>` : ''}
+      <div class="card"><b id="calc">${calc(grams)}</b></div>
+      <button class="btn" type="submit">${icon('check', 'icon-sm')} ${isNew ? 'Dodaj' : 'Zapisz'}</button>
+    </form>
+    ${isNew ? '' : `<button class="btn danger" id="delete-entry" style="margin-top:12px">${icon('trash-2', 'icon-sm')} Usuń z dziennika</button>`}
+    <a class="btn secondary" style="margin-top:12px" href="#/food/${food.id}">Edytuj produkt</a>
+  `, { back: `#/diet/${date}` });
+  const form = document.getElementById('entry-form');
+  form.grams.oninput = () => {
+    const g = Number(form.grams.value.replace(',', '.'));
+    document.getElementById('calc').textContent = Number.isFinite(g) ? calc(g) : '–';
+  };
+  form.onsubmit = async (ev) => {
+    ev.preventDefault();
+    const g = Number(form.grams.value.replace(',', '.'));
+    if (!(g > 0)) return;
+    if (isNew) dayEntries(date).push({ id: uid('e'), meal: form.meal.value, foodId: food.id, grams: g });
+    else Object.assign(entry, { grams: g, meal: form.meal.value });
+    food.lastUsed = new Date().toISOString();
+    await save();
+    location.hash = `#/diet/${date}`;
+  };
+  document.getElementById('delete-entry')?.addEventListener('click', async () => {
+    data.foodLog[date] = dayEntries(date).filter((e) => e !== entry);
+    await save();
+    location.hash = `#/diet/${date}`;
+  });
+}
+
+function viewFood(idOrNew, date, meal) {
+  const isNew = idOrNew === 'new';
+  const food = isNew ? { name: '', brand: '', per100: { kcal: '', p: '', f: '', c: '' }, servingG: '' } : foodById(idOrNew);
+  if (!food) return viewFoods();
+  const inUse = isNew ? 0 : Object.values(data.foodLog).flat().filter((e) => e.foodId === food.id).length;
+  const input = (name, label, value, mode = 'decimal') => `<label class="row"><span class="grow">${label}</span><input name="${name}" inputmode="${mode}" value="${esc(value ?? '')}"></label>`;
+  render(isNew ? 'Własny produkt' : 'Produkt', `
+    <form id="food-form">
+      <div class="list form">
+        <label class="row stacked"><span>Nazwa</span><input name="name" value="${esc(food.name)}" required></label>
+        <label class="row stacked"><span>Marka (opcjonalnie)</span><input name="brand" value="${esc(food.brand ?? '')}"></label>
+      </div>
+      <div class="section-title">Wartości na 100 g</div>
+      <div class="list form">
+        ${input('kcal', 'Kalorie (kcal)', food.per100.kcal)}
+        ${input('p', 'Białko (g)', food.per100.p)}
+        ${input('f', 'Tłuszcze (g)', food.per100.f)}
+        ${input('c', 'Węglowodany (g)', food.per100.c)}
+        ${input('servingG', 'Porcja (g, opcjonalnie)', food.servingG)}
+      </div>
+      <p class="muted small" style="margin:0 4px 16px">Wartości przepisz z etykiety. Zmiana przelicza też wcześniejsze wpisy z tym produktem.</p>
+      <button class="btn" type="submit">${icon('check', 'icon-sm')} Zapisz</button>
+    </form>
+    ${!isNew ? `<button class="btn danger" id="delete-food" style="margin-top:12px">${icon('trash-2', 'icon-sm')} Usuń produkt</button>` : ''}
+  `, { back: date ? `#/food-add/${date}/${meal}` : '#/foods' });
+  document.getElementById('food-form').onsubmit = async (ev) => {
+    ev.preventDefault();
+    const f = new FormData(ev.target);
+    const n = (k) => {
+      const v = String(f.get(k) ?? '').replace(',', '.').trim();
+      return v === '' ? null : Number(v);
+    };
+    const per100 = { kcal: n('kcal'), p: n('p') ?? 0, f: n('f') ?? 0, c: n('c') ?? 0 };
+    if (!(per100.kcal >= 0) || per100.kcal == null) { alert('Podaj kalorie na 100 g.'); return; }
+    const values = { name: String(f.get('name')).trim(), brand: String(f.get('brand')).trim() || null, per100, servingG: n('servingG') };
+    if (isNew) {
+      const saved = saveFood({ source: 'custom', ...values });
+      await save();
+      location.hash = date ? `#/entry/${date}/new-${meal}-${saved.id}` : '#/foods';
+    } else {
+      Object.assign(food, values);
+      await save();
+      history.back();
+    }
+  };
+  document.getElementById('delete-food')?.addEventListener('click', async () => {
+    if (inUse && !confirm(`Ten produkt jest w dzienniku ${inUse} razy. Usunąć go razem z tymi wpisami?`)) return;
+    if (!inUse && !confirm(`Usunąć „${food.name}”?`)) return;
+    data.foods = data.foods.filter((x) => x !== food);
+    for (const d of Object.keys(data.foodLog)) data.foodLog[d] = data.foodLog[d].filter((e) => e.foodId !== food.id);
+    for (const m of data.mealTemplates) m.items = m.items.filter((it) => it.foodId !== food.id);
+    await save();
+    location.hash = '#/foods';
+  });
+}
+
+function viewFoods() {
+  render('Moje produkty', `
+    <div class="section-title">Zapisane posiłki</div>
+    ${data.mealTemplates.length ? `<div class="list">${data.mealTemplates.map((m) => `
+      <div class="row"><div class="grow"><div class="title">${esc(m.name)}</div>
+        <div class="sub">${m.items.map((it) => `${esc(foodById(it.foodId)?.name ?? '?')} ${fmt(it.grams)} g`).join(', ')}</div></div>
+        <button type="button" class="icon-btn" data-rename-meal="${m.id}" aria-label="Zmień nazwę">${icon('settings', 'icon-sm')}</button>
+        <button type="button" class="icon-btn" data-del-meal="${m.id}" aria-label="Usuń">${icon('trash-2', 'icon-sm')}</button>
+      </div>`).join('')}</div>` : '<p class="muted small" style="margin:0 4px">Zapisz posiłek z dziennika przyciskiem „Zapisz jako posiłek”.</p>'}
+    <div class="section-title">Produkty</div>
+    <a class="btn" href="#/food/new">${icon('plus', 'icon-sm')} Własny produkt</a>
+    ${data.foods.length ? `<div class="list" style="margin-top:12px">${[...data.foods].sort((a, b) => a.name.localeCompare(b.name, 'pl')).map((f) => `
+      <a class="row" href="#/food/${f.id}"><div class="grow"><div class="title">${esc(f.name)}</div>
+        <div class="sub">${f.brand ? `${esc(f.brand)} · ` : ''}${fmt(f.per100.kcal)} kcal/100 g</div></div>
+        <span class="chev">${icon('chevron-right', 'icon-sm')}</span></a>`).join('')}</div>` : ''}
+    <div class="section-title">Baza USDA</div>
+    <div class="list form">
+      <label class="row stacked"><span>Własny klucz API (opcjonalnie, zwiększa limit z 30 do 1000 wyszukiwań/h)</span>
+        <input id="usda-key" value="${esc(data.settings.usdaKey ?? '')}" placeholder="DEMO_KEY" autocomplete="off"></label>
+    </div>
+    <p class="muted small" style="margin:0 4px">Darmowy klucz: <a href="https://fdc.nal.usda.gov/api-key-signup" target="_blank" rel="noopener">fdc.nal.usda.gov/api-key-signup</a></p>
+  `, { back: '#/diet' });
+  document.getElementById('usda-key').onchange = async (ev) => {
+    data.settings.usdaKey = ev.target.value.trim() || null;
+    await save();
+  };
+  view.onclick = async (ev) => {
+    const del = ev.target.closest('[data-del-meal]');
+    const ren = ev.target.closest('[data-rename-meal]');
+    if (del) {
+      const m = data.mealTemplates.find((x) => x.id === del.dataset.delMeal);
+      if (!confirm(`Usunąć posiłek „${m.name}”? Produkty zostają.`)) return;
+      data.mealTemplates = data.mealTemplates.filter((x) => x !== m);
+    } else if (ren) {
+      const m = data.mealTemplates.find((x) => x.id === ren.dataset.renameMeal);
+      const name = prompt('Nazwa posiłku', m.name)?.trim();
+      if (!name) return;
+      m.name = name;
+    } else return;
+    await save();
+    route();
+  };
+}
+
+function setDayValues(date, values) {
+  let log = dayLog(date);
+  if (!log) {
+    log = { date };
+    data.dailyLogs.push(log);
+    data.dailyLogs.sort((a, b) => a.date.localeCompare(b.date));
+  }
+  Object.assign(log, values);
+}
+
+const dayLog = (date) => (data.dailyLogs ?? []).find((l) => l.date === date);
+const stepsGoal = () => data.settings.stepsGoal ?? 8000;
+
+// Parses text copied by the iOS Shortcut, e.g. "kroki=8 512 kcal=430,5".
+
+function parseHealthText(text) {
+  const grab = (key) => {
+    const m = text.match(new RegExp(`(?:${key})\\s*[=:]\\s*([\\d\\s\\u00a0.,]+)`, 'i'));
+    if (!m) return null;
+    const v = Number(m[1].replace(/[\s ]/g, '').replace(',', '.'));
+    return Number.isFinite(v) ? Math.round(v) : null;
+  };
+  return { steps: grab('kroki|steps'), activeKcal: grab('kcal|energia') };
+}
+
+function stepBars(days) {
+  const goal = stepsGoal();
+  const rows = [];
+  for (let i = days - 1; i >= 0; i--) {
+    const date = shiftDate(todayIso(), -i);
+    rows.push({ date, steps: dayLog(date)?.steps ?? 0 });
+  }
+  const max = Math.max(goal, ...rows.map((r) => r.steps));
+  const w = 320, h = 120, gap = 4, bw = (w - gap * (days - 1)) / days;
+  const gy = h - 16 - goal / max * (h - 24);
+  return `<svg class="bars" viewBox="0 0 ${w} ${h}" role="img" aria-label="Kroki">
+    ${rows.map((r, i) => {
+      const bh = r.steps / max * (h - 24);
+      return `<rect x="${(i * (bw + gap)).toFixed(1)}" y="${(h - 16 - bh).toFixed(1)}" width="${bw.toFixed(1)}" height="${bh.toFixed(1)}" rx="3" class="${r.steps >= goal ? 'hit' : ''}"/>`;
+    }).join('')}
+    <line x1="0" x2="${w}" y1="${gy.toFixed(1)}" y2="${gy.toFixed(1)}" class="goal"/>
+    <text x="0" y="${h - 2}">${dateLabel(rows[0].date)}</text>
+    <text x="${w}" y="${h - 2}" text-anchor="end">dziś</text>
+  </svg>`;
+}
+
+function viewSteps() {
+  const today = todayIso();
+  const log = dayLog(today);
+  const avg7 = avg(lastWithin(data.dailyLogs, 'steps', 7));
+  render('Kroki', `
+    <div class="card">
+      <p>Dziś · cel ${fmt(stepsGoal())}</p>
+      <h2 style="font-size:34px">${fmt(log?.steps ?? 0)} <span class="muted" style="font-size:17px;font-weight:500">kroków</span></h2>
+      <p class="small">Średnio z 7 dni: ${fmt(avg7)}</p>
+      ${stepBars(14)}
+    </div>
+    <button class="btn" id="paste-health">${icon('download', 'icon-sm')} Wklej ze Skrótu</button>
+    <form id="steps-form" style="margin-top:16px">
+      <div class="list form">
+        <label class="row"><span class="grow">Kroki dziś</span><input name="steps" inputmode="numeric" value="${log?.steps ?? ''}" placeholder="np. 8500"></label>
+        <label class="row"><span class="grow">Aktywne kcal dziś</span><input name="activeKcal" inputmode="numeric" value="${log?.activeKcal ?? ''}" placeholder="opcjonalnie"></label>
+        <label class="row"><span class="grow">Dzienny cel kroków</span><input name="goal" inputmode="numeric" value="${stepsGoal()}"></label>
+      </div>
+      <button class="btn secondary" type="submit">${icon('check', 'icon-sm')} Zapisz</button>
+    </form>
+    <details class="list" style="margin-top:20px">
+      <summary><span class="grow">Jak połączyć ze Zdrowiem (iPhone)</span><span class="chev">${icon('chevron-right', 'icon-sm')}</span></summary>
+      <ul class="explain">
+        <li>Aplikacja w przeglądarce nie ma bezpośredniego dostępu do Zdrowia (Apple daje go tylko aplikacjom z App Store). Pomostem jest darmowa aplikacja <b>Skróty</b>.</li>
+        <li>W Skrótach utwórz nowy skrót „Zdrowie → Progress”.</li>
+        <li>Dodaj akcję <b>Znajdź próbki zdrowia</b>: typ <i>Kroki</i>, data początkowa <i>jest dzisiaj</i>. Potem <b>Oblicz statystyki</b> → <i>Suma</i>.</li>
+        <li>Powtórz dla typu <i>Energia aktywna</i> (opcjonalnie).</li>
+        <li>Dodaj akcję <b>Tekst</b>: <code>kroki=[Suma kroków] kcal=[Suma energii]</code>, a za nią <b>Kopiuj do schowka</b>.</li>
+        <li>Uruchom skrót (np. z widżetu albo przez stuknięcie w tył telefonu), otwórz Progress i stuknij „Wklej ze Skrótu”.</li>
+        <li>Aktywne kcal z ostatnich 30 dni poprawiają też wyliczenie zapotrzebowania w Diecie. W wersji natywnej (App Store) synchronizacja będzie automatyczna.</li>
+      </ul>
+    </details>
+    <p class="muted small" style="margin:12px 4px">Cel 8000 kroków: korzyści zdrowotne rosną do ok. 8–10 tys. kroków dziennie u osób przed 60. r.ż. (Paluch i in., Lancet Public Health 2022).</p>
+  `, { back: '#/today' });
+  const form = document.getElementById('steps-form');
+  form.onsubmit = async (ev) => {
+    ev.preventDefault();
+    const n = (k) => {
+      const v = form[k].value.replace(/\s/g, '');
+      return v === '' ? null : Math.round(Number(v));
+    };
+    if (n('goal') > 0) data.settings.stepsGoal = n('goal');
+    setDayValues(today, { steps: n('steps'), activeKcal: n('activeKcal') });
+    await save();
+    route();
+  };
+  document.getElementById('paste-health').onclick = async () => {
+    let text;
+    try {
+      text = await navigator.clipboard.readText();
+    } catch {
+      text = prompt('Wklej tekst ze Skrótu (np. kroki=8500 kcal=420)');
+    }
+    const values = parseHealthText(text ?? '');
+    if (values.steps == null && values.activeKcal == null) {
+      alert('W schowku nie ma danych ze Skrótu. Najpierw uruchom skrót „Zdrowie → Progress”.');
+      return;
+    }
+    setDayValues(today, Object.fromEntries(Object.entries(values).filter(([, v]) => v != null)));
+    await save();
+    route();
+  };
+}
+
+function viewTemplates() {
+  render('Gotowe plany', `
+    <p class="muted small" style="margin:0 4px 12px">Plan zostanie skopiowany do Twoich kategorii na 4 tygodnie. Potem możesz w nim zmieniać ćwiczenia, serie i ciężary.</p>
+    <div class="list">
+      ${TEMPLATES.map((t) => `<a class="row" href="#/template/${t.id}">
+        <div class="grow"><div class="title">${esc(t.name)}</div>
+        <div class="sub">${t.perWeek}× w tygodniu · ${esc(t.level)} · ${esc(t.equipment)}</div></div>
+        <span class="chev">${icon('chevron-right', 'icon-sm')}</span></a>`).join('')}
+    </div>
+  `, { back: '#/plans' });
+}
+
+function viewTemplate(id) {
+  const t = TEMPLATES.find((x) => x.id === id);
+  if (!t) return viewTemplates();
+  render(t.name, `
+    <div class="card">
+      <p>${t.perWeek}× w tygodniu · ${esc(t.level)} · ${esc(t.equipment)}</p>
+      <p style="color:var(--text);margin-top:8px">${esc(t.desc)}</p>
+      <p class="small" style="margin-top:8px"><b>Progresja:</b> ${esc(t.progression)}</p>
+    </div>
+    ${t.sessions.map((s) => `
+      <div class="section-title">${esc(s.name)}</div>
+      <div class="list">
+        ${s.main.map(([exId, sets, reps]) => `<a class="row" href="#/exercise/${exId}">
+          <div class="grow"><div class="title">${esc(CATALOG[exId]?.name ?? exId)}</div>
+          <div class="sub clamp">${esc(CATALOG[exId]?.desc ?? '')}</div></div>
+          <b class="nowrap">${sets} × ${esc(reps)}</b></a>`).join('')}
+      </div>`).join('')}
+    <p class="muted small" style="margin:12px 4px">Każdy trening ma też krótką rozgrzewkę i wyciszenie. RIR = ile powtórzeń zostawiasz w zapasie; plan zaczyna od RIR 3 i schodzi do 1 w 4. tygodniu.</p>
+    <button class="btn" id="use-template">${icon('plus', 'icon-sm')} Dodaj do moich planów</button>
+  `, { back: '#/templates' });
+  document.getElementById('use-template').onclick = async () => {
+    for (const exId of templateExerciseIds(t)) {
+      if (!exerciseById.has(exId)) {
+        const ex = { id: exId, name: CATALOG[exId]?.name ?? exId, uses: 0 };
+        data.exercises.push(ex);
+        exerciseById.set(exId, ex);
+      }
+    }
+    const program = buildProgram(t, uid('plan'));
+    data.programs.push(program);
+    data.settings.currentProgram = program.id;
+    data.settings.currentWeek = 1;
+    data.settings.plansTab = program.id;
+    await save();
+    location.hash = `#/plans/${program.id}`;
+  };
+}
+
+const MEAL_FILTERS = [['all', 'Wszystkie'], ...Object.entries(MEALS)];
+
+function viewRecipes(date, meal) {
+  let filter = meal && MEALS[meal] ? meal : 'all';
+  const draw = () => {
+    const list = RECIPES.filter((r) => filter === 'all' || r.meals.includes(filter));
+    render('Przepisy', `
+      <div class="segmented">
+        ${MEAL_FILTERS.map(([k, l]) => `<a href="#" data-filter="${k}" class="${filter === k ? 'active' : ''}">${l}</a>`).join('')}
+      </div>
+      <div class="list">
+        ${list.map((r) => {
+          const t = recipeTotals(r);
+          const n = r.portions;
+          return `<a class="row" href="#/recipe/${r.id}${date ? `/${date}/${meal}` : ''}">
+            <div class="grow"><div class="title">${esc(r.name)}</div>
+            <div class="sub">${r.minutes} min · porcja: ${fmt(t.kcal / n)} kcal · B ${fmt(t.p / n)} · T ${fmt(t.f / n)} · W ${fmt(t.c / n)}</div></div>
+            <span class="chev">${icon('chevron-right', 'icon-sm')}</span></a>`;
+        }).join('')}
+      </div>
+      <p class="muted small" style="margin:12px 4px">Wartości odżywcze wyliczone z bazy USDA FoodData Central (domena publiczna) dla surowych składników.</p>
+    `, { back: date ? `#/food-add/${date}/${meal}` : '#/diet' });
+    view.onclick = onclick;
+  };
+  const onclick = (ev) => {
+    const f = ev.target.closest('[data-filter]');
+    if (!f) return;
+    ev.preventDefault();
+    filter = f.dataset.filter;
+    draw();
+  };
+  draw();
+}
+
+function viewRecipe(id, date, meal) {
+  const r = RECIPES.find((x) => x.id === id);
+  if (!r) return viewRecipes(date, meal);
+  const t = recipeTotals(r);
+  const n = r.portions;
+  const day = date ?? todayIso();
+  render(r.name, `
+    <div class="card">
+      <p>${r.minutes} min · ${n} ${n === 1 ? 'porcja' : n < 5 ? 'porcje' : 'porcji'}</p>
+      <h2>${fmt(t.kcal / n)} <span class="muted" style="font-size:15px;font-weight:500">kcal na porcję</span></h2>
+      <p class="small">Białko ${fmt(t.p / n)} g · Tłuszcze ${fmt(t.f / n)} g · Węglowodany ${fmt(t.c / n)} g</p>
+    </div>
+    <div class="section-title">Składniki (na ${n === 1 ? '1 porcję' : `${n} porcje`})</div>
+    <div class="list">
+      ${r.items.map(([ing, g]) => `<div class="row"><span class="grow">${esc(INGREDIENTS[ing].name)}</span><span class="sub">${g} g</span></div>`).join('')}
+    </div>
+    <div class="section-title">Przygotowanie</div>
+    <ol class="card steps">${r.steps.map((s) => `<li>${esc(s)}</li>`).join('')}</ol>
+    <div class="section-title">Dodaj do dziennika</div>
+    <form id="recipe-add">
+      <div class="list form">
+        <label class="row"><span class="grow">Posiłek</span><select name="meal">${Object.entries(MEALS).map(([k, v]) => `<option value="${k}" ${k === (meal ?? r.meals[0]) ? 'selected' : ''}>${v}</option>`).join('')}</select></label>
+        <label class="row"><span class="grow">Liczba porcji</span><input name="portions" inputmode="decimal" value="1"></label>
+      </div>
+      <button class="btn" type="submit">${icon('plus', 'icon-sm')} Dodaj (${day === todayIso() ? 'dziś' : dateLabel(day)})</button>
+    </form>
+    <details class="list" style="margin-top:16px">
+      <summary><span class="grow">Źródła wartości odżywczych</span><span class="chev">${icon('chevron-right', 'icon-sm')}</span></summary>
+      <ul class="explain">${r.items.map(([ing]) => `<li>${esc(INGREDIENTS[ing].name)}: ${esc(INGREDIENTS[ing].source)}</li>`).join('')}</ul>
+    </details>
+  `, { back: date ? `#/recipes/${date}/${meal}` : '#/recipes' });
+  document.getElementById('recipe-add').onsubmit = async (ev) => {
+    ev.preventDefault();
+    const f = ev.target;
+    const portions = Number(f.portions.value.replace(',', '.'));
+    if (!(portions > 0)) return;
+    const { per100, portionG } = recipePer100(r);
+    const food = saveFood({ source: 'recipe', code: r.id, name: r.name, brand: null, per100, servingG: portionG });
+    food.lastUsed = new Date().toISOString();
+    dayEntries(day).push({ id: uid('e'), meal: f.meal.value, foodId: food.id, grams: Math.round(portionG * portions) });
+    await save();
+    location.hash = `#/diet/${day}`;
+  };
+}
+
 // ---------- routing ----------
 
 const ROUTES = [
@@ -1005,7 +1642,21 @@ const ROUTES = [
   [/^#\/session\/([^/]+)\/(\d+)\/(\d+)$/, viewSession, 'plans'],
   [/^#\/edit\/([^/]+)\/(\d+)\/(\d+)$/, viewEdit, 'plans'],
   [/^#\/log\/([^/]+)\/(\d+)\/(\d+)$/, viewLog, 'today'],
-  [/^#\/diet$/, viewDiet, 'diet'],
+  [/^#\/diet$/, () => viewDiet(), 'diet'],
+  [/^#\/diet\/(\d{4}-\d{2}-\d{2})$/, viewDiet, 'diet'],
+  [/^#\/nutrition$/, viewNutrition, 'diet'],
+  [/^#\/food-add\/(\d{4}-\d{2}-\d{2})\/(\w+)$/, viewFoodAdd, 'diet'],
+  [/^#\/entry\/(\d{4}-\d{2}-\d{2})\/([\w-]+)$/, viewEntry, 'diet'],
+  [/^#\/foods$/, viewFoods, 'diet'],
+  [/^#\/recipes$/, () => viewRecipes(), 'diet'],
+  [/^#\/recipes\/(\d{4}-\d{2}-\d{2})\/(\w+)$/, viewRecipes, 'diet'],
+  [/^#\/recipe\/([\w-]+)$/, (id) => viewRecipe(id), 'diet'],
+  [/^#\/recipe\/([\w-]+)\/(\d{4}-\d{2}-\d{2})\/(\w+)$/, viewRecipe, 'diet'],
+  [/^#\/steps$/, viewSteps, 'today'],
+  [/^#\/templates$/, viewTemplates, 'plans'],
+  [/^#\/template\/([\w-]+)$/, viewTemplate, 'plans'],
+  [/^#\/food\/new\/(\d{4}-\d{2}-\d{2})\/(\w+)$/, (d, m) => viewFood('new', d, m), 'diet'],
+  [/^#\/food\/([\w-]+)$/, (id) => viewFood(id), 'diet'],
   [/^#\/progress$/, viewProgress, 'progress'],
   [/^#\/history\/([^/]+)$/, viewHistory, 'progress'],
   [/^#\/settings$/, viewSettings, null],

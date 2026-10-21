@@ -264,4 +264,21 @@ export const CATALOG = {
   'lezenie-v-nogi': e('Leżenie z nogami w V', 'Mobilność', 'Leżąc na plecach przy ścianie, nogi rozłożone w V; rozciąganie przywodzicieli.'),
   '15-oddechow-torem-brzusznym': e('15 oddechów przeponowych', 'Mobilność', 'Spokojne oddechy torem brzusznym na wyciszenie po treningu.'),
   'wislowanie-sztanga': e('Wiosłowanie sztangą', 'Plecy', 'Przyciąganie sztangi do brzucha w pochyleniu tułowia.', { unsure: true }),
+
+  // Popular exercises used by the ready-made plans (plan-templates.js).
+  'push-up': e('Pompki', 'Klatka', 'Dłonie nieco szerzej niż barki, ciało w jednej linii, klatka nisko nad podłogą. Łatwiej: dłonie na podwyższeniu lub z kolan.'),
+  'pike-push-up': e('Pompki w pozycji pike', 'Barki', 'Biodra wysoko, ciało w kształcie odwróconego V; opuszczaj głowę między dłonie. Domowy zamiennik wyciskania nad głowę.'),
+  'bench-dips': e('Pompki w podporze tyłem', 'Ramiona', 'Dłonie na krawędzi ławki lub krzesła za plecami, zginaj łokcie do ok. 90°. Ćwiczy triceps.'),
+  'bodyweight-squat': e('Przysiad bez obciążenia', 'Nogi', 'Stopy na szerokość bioder, siadaj biodrami w tył i w dół, pięty na podłodze, kolana w linii palców.'),
+  'reverse-lunge': e('Wykrok w tył', 'Nogi', 'Krok w tył i opuszczenie kolana tuż nad podłogę; mniej obciąża kolano niż wykrok w przód.'),
+  'glute-bridge': e('Unoszenie bioder leżąc (mostek)', 'Nogi', 'Leżąc na plecach ze zgiętymi kolanami, unieś biodra do linii kolano–bark i zaciśnij pośladki.'),
+  'leg-press': e('Wypychanie nóg na suwnicy', 'Nogi', 'Stopy na platformie na szerokość bioder, opuszczaj do ok. 90° w kolanach bez odrywania lędźwi od oparcia.'),
+  'leg-curl-machine': e('Uginanie nóg na maszynie', 'Nogi', 'Zginaj kolana pokonując opór wałka, powoli wracaj. Ćwiczy tył uda.'),
+  'leg-extension': e('Prostowanie nóg na maszynie', 'Nogi', 'Prostuj kolana do pełnego wyprostu, krótka pauza u góry, powolny powrót. Ćwiczy przód uda.'),
+  'face-pull': e('Face pull na wyciągu', 'Barki', 'Lina na wysokości twarzy, przyciągaj do czoła rozchylając końce liny; łokcie wysoko. Tył barków i rotatory.'),
+  'db-curl': e('Uginanie ramion z hantlami', 'Ramiona', 'Łokcie przy tułowiu, uginaj z supinacją nadgarstka, bez bujania tułowiem.'),
+  'superman': e('Superman', 'Brzuch i core', 'Leżąc przodem, unieś jednocześnie ręce i nogi kilka centymetrów nad podłogę, przytrzymaj 1–2 s.'),
+  'mountain-climbers': e('Wspinaczka (mountain climbers)', 'Kondycja', 'W podporze przodem dynamicznie przyciągaj kolana na zmianę do klatki, biodra nisko.'),
+  'jumping-jacks': e('Pajacyki', 'Kondycja', 'Skoki z jednoczesnym rozstawieniem nóg i uniesieniem rąk nad głowę.'),
+  'brisk-walk': e('Szybki marsz', 'Kondycja', 'Marsz w tempie, w którym da się mówić, ale nie śpiewać (ok. 100+ kroków na minutę).'),
 };

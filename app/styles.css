@@ -272,3 +272,29 @@ ul.explain { padding: 0 16px 8px 34px; color: var(--text); }
 ul.explain li + li { margin-top: 8px; }
 .sources { padding: 4px 16px 14px; display: grid; gap: 2px; }
 .sources a { color: var(--accent); font-size: 14px; margin-top: 6px; }
+
+/* Meal diary, steps, recipes */
+.day-switch { display: flex; align-items: center; justify-content: space-between; margin: 0 0 12px; }
+.day-switch b { font-size: 17px; }
+.day-switch b::first-letter { text-transform: uppercase; }
+.meal-head { display: flex; justify-content: space-between; }
+.meal-actions { gap: 16px; padding-top: 2px; padding-bottom: 2px; }
+.meal-actions .link-btn { margin-top: 0; }
+button.row.food-row { width: 100%; border: 0; background: none; font: inherit; color: inherit; text-align: left; }
+.list button.row.food-row + button.row.food-row { border-top: 0.5px solid var(--separator, rgba(128,128,128,.25)); }
+.add-row { display: flex; gap: 8px; align-items: center; padding: 8px 8px 8px 14px; }
+.add-row input { flex: 1; min-width: 0; border: 0; background: none; font: inherit; font-size: 17px; color: inherit; outline: none; }
+.icon-btn.accent { background: var(--accent); color: #fff; border-radius: 10px; }
+.error-box { background: color-mix(in srgb, #ff3b30 12%, var(--card)); color: #ff3b30; padding: 12px 14px; border-radius: 12px; margin: 8px 0; }
+.bar.thin { height: 5px; margin-top: 8px; }
+.bar.thin > span { background: var(--good, #34c759); }
+.stat .sub { margin-top: 6px; }
+.bars { width: 100%; height: 120px; display: block; margin-top: 10px; }
+.bars rect { fill: var(--accent-soft); }
+.bars rect.hit { fill: var(--accent); }
+.bars line.goal { stroke: var(--muted); stroke-dasharray: 4 4; stroke-width: 1; }
+.bars text { font-size: 11px; fill: var(--muted); }
+ol.steps { padding-left: 34px; line-height: 1.5; }
+ol.steps li + li { margin-top: 6px; }
+.nowrap { white-space: nowrap; }
+code { font-size: 13px; background: var(--bg); padding: 1px 5px; border-radius: 5px; }
