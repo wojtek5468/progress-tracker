@@ -34,3 +34,23 @@ test('barbell detection from the Polish name', () => {
   assert.ok(isBarbell('Martwy ciąg', 'Sztanga z podłogi'));
   assert.ok(!isBarbell('Wiosłowanie hantlem'));
 });
+
+import { progression } from '../app/js/training.js';
+
+test('progression: reps with reps to spare add weight', () => {
+  assert.equal(progression([[{ kg: 80, reps: 5, rir: 2 }, { kg: 80, reps: 5, rir: 3 }]], { targetReps: 5 }).kg, 82.5);
+  assert.equal(progression([[{ kg: 20, reps: 10 }]], { targetReps: 10, step: 2 }).kg, 22);
+});
+
+test('progression: close to failure keeps, two misses deload', () => {
+  assert.equal(progression([[{ kg: 80, reps: 5, rir: 1 }]], { targetReps: 5 }).change, 'same');
+  assert.equal(progression([[{ kg: 80, reps: 4 }]], { targetReps: 5 }).change, 'same');
+  const d = progression([[{ kg: 80, reps: 4 }], [{ kg: 80, reps: 3 }]], { targetReps: 5 });
+  assert.equal(d.change, 'deload');
+  assert.equal(d.kg, 72.5);
+});
+
+test('progression needs a target or RIR, and some sets', () => {
+  assert.equal(progression([[{ kg: 80, reps: 5 }]]), null);
+  assert.equal(progression([]), null);
+});

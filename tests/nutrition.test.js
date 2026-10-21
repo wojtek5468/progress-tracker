@@ -47,3 +47,41 @@ test('adaptive TDEE waits for enough data', () => {
   const a = adaptiveTdee(weightTrend(dates.map((date) => ({ date, value: 90 }))), {}, '2026-09-10');
   assert.equal(a.tdee, null);
 });
+
+import { dayTargets, goalForecast, rateForGoal, defaultTrainingDays } from '../app/js/nutrition.js';
+
+test('training-day macros keep the weekly total', () => {
+  const t = { kcal: 2200, protein: 160, fat: 80, carbs: 210 };
+  const on = dayTargets(t, true, 3);
+  const off = dayTargets(t, false, 3);
+  assert.equal(on.protein, 160);
+  assert.equal(off.fat, 80);
+  assert.ok(on.carbs > 210 && off.carbs < 210);
+  const week = on.kcal * 3 + off.kcal * 4;
+  assert.ok(Math.abs(week - 2200 * 7) <= 7 * 10, `week ${week}`);
+  assert.equal(dayTargets(t, true, 0), t);
+  assert.equal(dayTargets(t, true, 7), t);
+});
+
+test('default training days', () => {
+  assert.deepEqual(defaultTrainingDays(3), [1, 3, 5]);
+  assert.deepEqual(defaultTrainingDays(undefined), [1, 3, 5]);
+});
+
+test('goal forecast: on track, behind, stalled', () => {
+  const base = { currentKg: 88, goalKg: 82, goalDate: '2027-03-01', today: '2026-10-21' };
+  const ok = goalForecast({ ...base, ratePerWeek: -0.5 });
+  assert.equal(ok.status, 'on-track');
+  assert.equal(ok.toGo, -6);
+  assert.equal(ok.eta, '2027-01-13');
+  assert.equal(goalForecast({ ...base, ratePerWeek: -0.2 }).status, 'behind');
+  assert.equal(goalForecast({ ...base, ratePerWeek: 0.1 }).status, 'stalled');
+  assert.equal(goalForecast({ ...base, currentKg: 82.1, ratePerWeek: -0.2 }).status, 'reached');
+});
+
+test('rate for the goal date stays within 0.25–1% a week', () => {
+  const f = goalForecast({ currentKg: 88, goalKg: 82, goalDate: '2027-03-01', ratePerWeek: -0.2, today: '2026-10-21' });
+  assert.equal(rateForGoal(f), 0.35);
+  const rush = goalForecast({ currentKg: 88, goalKg: 78, goalDate: '2026-12-01', ratePerWeek: -0.2, today: '2026-10-21' });
+  assert.equal(rateForGoal(rush), 1);
+});

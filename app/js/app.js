@@ -1,13 +1,13 @@
 import { icon } from './icons.js';
 import * as db from './db.js';
 import { CATALOG, CATEGORIES } from './exercise-catalog.js';
-import { computeTargets, SOURCES, GOALS, ACTIVITY, weightTrend, trendRate, adaptiveTdee, ADAPTIVE_MIN_DAYS } from './nutrition.js';
+import { computeTargets, SOURCES, GOALS, ACTIVITY, weightTrend, trendRate, adaptiveTdee, ADAPTIVE_MIN_DAYS, dayTargets, defaultTrainingDays, goalForecast, rateForGoal } from './nutrition.js';
 import { searchOff, searchUsda, lookupBarcode, submitToOff, uploadOffPhoto } from './foods-api.js';
 import { TEMPLATES, PLACES, AUDIENCES, forAudience, buildProgram, templateExerciseIds, templatePreview } from './plan-templates.js';
 import { scanBarcode } from './scanner.js';
 import { loadLocal, searchLocal, localByCode } from './off-local.js';
 import { RECIPES, INGREDIENTS, recipeTotals, recipePer100, isVege } from './recipes.js';
-import { estimate1RM, round25, platesPerSide, warmupSets, isBarbell, DEFAULT_BAR_KG, DEFAULT_PLATES } from './training.js';
+import { estimate1RM, round25, platesPerSide, warmupSets, isBarbell, progression, DEFAULT_BAR_KG, DEFAULT_PLATES } from './training.js';
 import { rankByText } from './search.js';
 import { SCHEMA_VERSION, migrate, checkImport } from './migrate.js';
 import { parseHealthText } from './health-text.js';
@@ -44,6 +44,12 @@ const exName = (id) => exInfo(id).name;
 const uid = (prefix) => `${prefix}-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`;
 const sessionTitle = (s) => s.name || `Trening ${s.order}`;
 const targets = () => computeTargets(data.profile, data.dailyLogs, data.profile.tdeeMode === 'adaptive' ? adaptive() : null);
+const isoWeekday = (iso) => new Date(`${iso}T12:00:00`).getDay() || 7;
+// Planned training weekday, or any day with a logged workout.
+const isTrainingDay = (date) => (data.profile.trainingDays ?? []).includes(isoWeekday(date)) || data.workoutLogs.some((l) => l.date === date);
+// Targets for one day: with training-day macros on, carbs move between training and rest days.
+const targetsFor = (date) => (data.profile.carbCycling
+  ? dayTargets(targets(), isTrainingDay(date), data.profile.trainingDays?.length ?? 0) : targets());
 const weightPoints = () => (data.bodyMeasurements ?? []).filter((m) => m.weightKg).map((m) => ({ date: m.date, value: m.weightKg }));
 // Calories eaten per day, from the food diary.
 const dailyIntake = () => Object.fromEntries(Object.entries(data.foodLog ?? {})
@@ -181,7 +187,7 @@ async function viewToday() {
   const today = todayIso();
   const logs = data.dailyLogs ?? [];
   const sleep7 = avg(lastWithin(logs, 'sleepMin', 7));
-  const t = targets();
+  const t = targetsFor(today);
   const eaten = sumMacros(dayEntries(today));
   const meal = mealNow();
   const lastLog = data.workoutLogs.at(-1);
@@ -214,6 +220,8 @@ async function viewToday() {
       <p>${backupDays === Infinity ? 'Nie masz jeszcze kopii danych.' : `Ostatnia kopia danych: ${backupDays} dni temu.`} Dane są tylko na tym telefonie; kopia w Plikach (iCloud) chroni je przed utratą.</p>
       <div class="notice-actions"><button class="btn" id="backup-now">${icon('download', 'icon-sm')} Zapisz kopię</button><button class="btn secondary" id="backup-later">Później</button></div>
     </div>` : ''}
+    ${reviewDue() ? `<a class="list row" href="#/review">${icon('calendar-check', 'icon-sm')}<div class="grow"><div class="title">Przegląd tygodnia</div>
+      <div class="sub">Podsumowanie i propozycje na kolejny tydzień</div></div><span class="chev">${icon('chevron-right', 'icon-sm')}</span></a>` : ''}
     <div class="card hero">
       ${hero.p ? `<p>${hero.p}</p>` : ''}
       ${hero.h ? `<h2>${hero.h}</h2>` : ''}
@@ -454,6 +462,55 @@ function viewSession(programId, number, order) {
   };
 }
 
+function currentForecast() {
+  const p = data.profile;
+  if (!p.goalWeightKg) return null;
+  const trend = weightTrend(weightPoints());
+  return goalForecast({ currentKg: trend.at(-1)?.trend ?? p.weightKg, goalKg: p.goalWeightKg, goalDate: p.goalDate, ratePerWeek: trendRate(trend), today: todayIso() });
+}
+
+// Rate (in % per week) that would meet the goal date, when it differs from the current setting.
+function suggestedRate(f) {
+  const p = data.profile;
+  const rate = rateForGoal(f);
+  const dir = f && Math.sign(f.toGo);
+  const goalDir = p.goal === 'reduction' ? -1 : p.goal === 'gain' ? 1 : 0;
+  return rate != null && dir === goalDir && rate !== (p.weeklyRatePct ?? 0.5) ? rate : null;
+}
+
+const longDate = (iso) => new Date(`${iso}T12:00:00`).toLocaleDateString('pl-PL', { day: 'numeric', month: 'long', year: 'numeric' });
+
+function goalCard() {
+  const f = currentForecast();
+  if (!f) {
+    return `<a class="card" href="#/profile" style="display:block;color:inherit;text-decoration:none"><p>Cel z terminem</p>
+      <p class="small" style="margin-top:4px">Ustaw wagę docelową i datę w profilu, a aplikacja policzy potrzebne tempo i powie, czy zdążysz.</p></a>`;
+  }
+  const p = data.profile;
+  const kg = (x) => `${fmt(Math.abs(x), 1)} kg`;
+  const line = {
+    reached: 'Cel osiągnięty. Ustaw nowy albo przejdź na utrzymanie.',
+    overdue: `Termin minął; do celu brakuje ${kg(f.toGo)}.`,
+    stalled: 'Trend wagi stoi albo idzie w drugą stronę, więc nie da się jeszcze przewidzieć daty.',
+    behind: `W obecnym tempie cel osiągniesz ok. ${longDate(f.eta)}, czyli po terminie.`,
+    'on-track': f.eta ? `W obecnym tempie cel osiągniesz ok. ${longDate(f.eta)}.` : '',
+  }[f.status];
+  const rate = suggestedRate(f);
+  return `<div class="card goal">
+    <p>Cel: ${fmt(p.goalWeightKg, 1)} kg${p.goalDate ? ` do ${longDate(p.goalDate)}` : ''}</p>
+    <h2>${f.status === 'reached' ? 'Gotowe' : `${f.toGo < 0 ? 'Zostało' : 'Brakuje'} ${kg(f.toGo)}`}</h2>
+    ${f.neededPerWeek != null && f.status !== 'reached' ? `<p class="small">Potrzebne tempo: ${kg(f.neededPerWeek)} na tydzień (${fmt(f.neededPct, 2)}% masy ciała)${f.neededPct > 1 ? ', szybciej niż bezpieczne 1%, rozważ późniejszy termin' : ''}.</p>` : ''}
+    ${line ? `<p class="small">${line}</p>` : ''}
+    ${rate ? `<button class="btn secondary" data-rate="${rate}" style="margin-top:12px">Dopasuj tempo do terminu: ${fmt(rate, 2)}% / tydzień</button>` : ''}
+  </div>`;
+}
+
+async function applyRate(rate) {
+  data.profile.weeklyRatePct = rate;
+  await save();
+  route();
+}
+
 function adaptiveCard(t) {
   const a = adaptive();
   const on = data.profile.tdeeMode === 'adaptive';
@@ -498,6 +555,7 @@ function viewNutrition() {
       <a class="btn secondary" style="margin-top:14px" href="#/profile">Zmień cel lub dane</a>
     </div>
     ${adaptiveCard(t)}
+    ${goalCard()}
     <details class="list">
       <summary><span class="grow">Jak to policzyłem</span><span class="chev">${icon('chevron-right', 'icon-sm')}</span></summary>
       <ul class="explain">
@@ -532,6 +590,7 @@ function viewNutrition() {
         <ul>${s.items.map((i) => `<li>${esc(i)}</li>`).join('')}</ul>
       </details>`).join('')}
   `, { back: '#/diet' });
+  view.querySelector('[data-rate]')?.addEventListener('click', (ev) => applyRate(Number(ev.currentTarget.dataset.rate)));
   document.getElementById('tdee-mode')?.addEventListener('click', async () => {
     data.profile.tdeeMode = data.profile.tdeeMode === 'adaptive' ? 'formula' : 'adaptive';
     await save();
@@ -657,6 +716,9 @@ function viewProgress() {
       ${sparkline(recent, 'kg', { trend: recent.map((p) => ({ date: p.date, value: p.trend })) })}
       <p class="small muted" style="margin-top:6px">Kropki to pomiary, linia to średnia wygładzona. Dzienne wahania o 1–2 kg to głównie woda.</p>
     </div>
+    ${data.profile.goalWeightKg ? goalCard() : ''}
+    <a class="card" href="#/review" style="display:block;color:inherit;text-decoration:none"><p>${icon('calendar-check', 'icon-xs')} Przegląd tygodnia</p>
+      <p class="small" style="margin-top:4px">Podsumowanie ostatnich 7 dni i propozycje na kolejny tydzień.</p></a>
     <a class="card" href="#/steps" style="display:block;color:inherit;text-decoration:none">
       <p>Kroki · ostatnie 14 dni</p>
       ${stepBars(14)}
@@ -684,6 +746,7 @@ function viewProgress() {
         </a>`).join('')}
     </div>` : '<p class="muted small" style="margin:0 4px">Brak zapisanych treningów. Zacznij trening z zakładki Dziś.</p>'}
   `);
+  view.querySelector('[data-rate]')?.addEventListener('click', (ev) => applyRate(Number(ev.currentTarget.dataset.rate)));
 }
 
 async function viewSettings() {
@@ -699,6 +762,7 @@ async function viewSettings() {
     </div>
     <div class="section-title">Trening</div>
     <div class="list form">
+      <label class="row"><span class="grow">Podpowiadaj ciężary (progresja)</span><input type="checkbox" id="auto-progression" ${st.autoProgression === false ? '' : 'checked'} style="width:auto"></label>
       <label class="row"><span class="grow">Dźwięk po przerwie</span><input type="checkbox" id="rest-sound" ${st.restSound === false ? '' : 'checked'} style="width:auto"></label>
       <label class="row"><span class="grow">Sztanga (kg)</span><input id="bar-kg" inputmode="decimal" value="${fmt(st.barKg ?? DEFAULT_BAR_KG, 2)}"></label>
       <label class="row stacked"><span>Talerze na Twojej siłowni (kg, oddziel średnikami)</span><input id="plates" value="${(st.plates ?? DEFAULT_PLATES).map((x) => fmt(x, 2)).join('; ')}"></label>
@@ -722,6 +786,10 @@ async function viewSettings() {
       alert(`Nie udało się zapisać kopii: ${err.message}`);
     }
   });
+  document.getElementById('auto-progression')?.addEventListener('change', async (ev) => {
+    data.settings.autoProgression = ev.target.checked;
+    await save();
+  });
   document.getElementById('rest-sound')?.addEventListener('change', async (ev) => {
     data.settings.restSound = ev.target.checked;
     await save();
@@ -744,6 +812,115 @@ async function viewSettings() {
     location.hash = '#/today';
     route();
   });
+}
+
+// ---------- weekly review ----------
+
+// The last 7 complete days, ending yesterday.
+function weekSummary(end = shiftDate(todayIso(), -1)) {
+  const start = shiftDate(end, -6);
+  const days = Array.from({ length: 7 }, (_, i) => shiftDate(start, i));
+  const trend = weightTrend(weightPoints());
+  const trendAt = (d) => [...trend].reverse().find((x) => x.date <= d)?.trend ?? null;
+  const logged = days.filter((d) => (data.foodLog[d] ?? []).length);
+  const eaten = logged.map((d) => sumMacros(data.foodLog[d]));
+  const workouts = data.workoutLogs.filter((l) => l.date >= start && l.date <= end);
+  const w0 = trendAt(shiftDate(start, -1));
+  const w1 = trendAt(end);
+  return {
+    start, end,
+    weightChange: w0 != null && w1 != null && trend.some((x) => x.date >= start && x.date <= end) ? Math.round((w1 - w0) * 100) / 100 : null,
+    weight: w1,
+    loggedDays: logged.length,
+    avgKcal: avg(eaten.map((e) => e.kcal)),
+    avgTargetKcal: avg(logged.map((d) => targetsFor(d)?.kcal).filter(Boolean)),
+    avgProtein: avg(eaten.map((e) => e.p)),
+    workouts: workouts.length,
+    sets: workouts.reduce((n, l) => n + l.entries.reduce((m, e) => m + e.sets.filter((x) => !x.warmup).length, 0), 0),
+    records: workouts.reduce((n, l) => n + l.records.length, 0),
+    steps: avg(days.map((d) => dayLog(d)?.steps).filter((x) => x != null)),
+  };
+}
+
+// Proposals for next week; the ones with `apply` can be accepted with one tap.
+function weekProposals(sum) {
+  const p = data.profile;
+  const out = [];
+  const f = currentForecast();
+  const rate = suggestedRate(f);
+  if (rate) {
+    out.push({ id: 'rate', text: `Tempo ${fmt(rate, 2)}% masy ciała na tydzień zamiast ${fmt(p.weeklyRatePct ?? 0.5, 2)}%, żeby zdążyć z celem ${fmt(p.goalWeightKg, 1)} kg na ${longDate(p.goalDate)}.`, apply: () => { p.weeklyRatePct = rate; } });
+  }
+  const a = adaptive();
+  const t = targets();
+  if (t && a.tdee && p.tdeeMode !== 'adaptive' && Math.abs(a.tdee - t.formulaTdee) >= 150) {
+    out.push({ id: 'adaptive', text: `Licz cel z Twoich danych: zapotrzebowanie wychodzi ${fmt(a.tdee)} kcal, a wzór zakłada ${fmt(t.formulaTdee)} kcal.`, apply: () => { p.tdeeMode = 'adaptive'; } });
+  }
+  const cw = currentWeek();
+  if (cw) {
+    const done = new Set(data.workoutLogs.map((l) => l.sessionKey));
+    const allDone = cw.week.sessions.length && cw.week.sessions.every((x) => done.has(sessionKey(cw.program.id, cw.week.number, x.order)));
+    const next = cw.program.weeks.find((w) => w.number === cw.week.number + 1);
+    if (allDone && next) {
+      out.push({ id: 'week', text: `Wszystkie treningi z tygodnia ${cw.week.number} zrobione. Przejdź do tygodnia ${next.number}${next.label ? ` (${next.label})` : ''}.`, apply: () => { data.settings.currentWeek = next.number; } });
+    } else if (allDone) {
+      out.push({ id: 'end', text: `To był ostatni tydzień planu „${cw.program.name}”. Skopiuj go jako nowy tydzień albo wybierz kolejny plan; ciężary podpowie progresja.` });
+    }
+    const hints = new Map();
+    for (const session of (next && allDone ? next : cw.week).sessions) {
+      for (const it of session.blocks.find((b) => b.type === 'main')?.items ?? []) {
+        if (suggestedKg(it) != null || hints.has(it.exerciseId)) continue;
+        const h = progressionHint(it.exerciseId, defaultReps(it));
+        if (h && h.change !== 'same') hints.set(it.exerciseId, `${exName(it.exerciseId)}: ${h.reason}`);
+      }
+    }
+    if (hints.size) out.push({ id: 'progression', text: `Ciężary na kolejne treningi (podpowie je logger): ${[...hints.values()].join('; ')}.` });
+  }
+  if (sum.loggedDays < 5) {
+    out.push({ id: 'log', text: `Posiłki wpisane w ${sum.loggedDays} z 7 dni. Przy 5 i więcej dniach korekty kalorii są dużo trafniejsze.` });
+  }
+  if (t && sum.avgProtein != null && sum.avgProtein < t.protein * 0.85) {
+    out.push({ id: 'protein', text: `Białko średnio ${fmt(sum.avgProtein)} g z ${fmt(t.protein)} g. Najprościej dodać porcję skyru, twarogu albo odżywki do jednego posiłku.` });
+  }
+  return out;
+}
+
+const reviewDue = () => {
+  const last = data.settings.lastReviewDate;
+  const day = isoWeekday(todayIso());
+  const active = data.workoutLogs.some((l) => l.date >= shiftDate(todayIso(), -7)) || Object.keys(data.foodLog).some((d) => d >= shiftDate(todayIso(), -7) && data.foodLog[d].length);
+  return active && (day === 7 || day === 1) && (!last || last <= shiftDate(todayIso(), -6));
+};
+
+function viewReview() {
+  const sum = weekSummary();
+  const props = weekProposals(sum);
+  const t = targets();
+  const cw = currentWeek();
+  const stat = (label, value, sub = '') => `<div class="stat"><div class="label">${label}</div><div class="value">${value}</div>${sub ? `<div class="sub small muted">${sub}</div>` : ''}</div>`;
+  render('Przegląd tygodnia', `
+    <p class="muted small" style="margin:0 4px 12px">${dateLabel(sum.start)} – ${dateLabel(sum.end)}</p>
+    <div class="stats">
+      ${stat('Waga (trend)', sum.weightChange != null ? `${sum.weightChange > 0 ? '+' : sum.weightChange < 0 ? '−' : ''}${fmt(Math.abs(sum.weightChange), 2)}<span class="unit">kg</span>` : '–', sum.weightChange != null ? `teraz ${fmt(sum.weight, 1)} kg` : 'brak ważeń w tym tygodniu')}
+      ${stat('Kalorie', sum.avgKcal != null ? fmt(sum.avgKcal) : '–', sum.avgTargetKcal ? `średnio, cel ${fmt(sum.avgTargetKcal)} · ${sum.loggedDays}/7 dni` : `${sum.loggedDays}/7 dni wpisanych`)}
+      ${stat('Białko', sum.avgProtein != null ? `${fmt(sum.avgProtein)}<span class="unit">g</span>` : '–', t ? `średnio, cel ${fmt(t.protein)} g` : '')}
+      ${stat('Treningi', `${sum.workouts}${cw ? `<span class="unit">/ ${cw.week.sessions.length}</span>` : ''}`, `${sum.sets} serii${sum.records ? ` · rekordy: ${sum.records}` : ''}`)}
+    </div>
+    ${sum.steps != null ? `<p class="muted small" style="margin:0 4px 12px">Kroki: średnio ${fmt(sum.steps)} dziennie (cel ${fmt(stepsGoal())}).</p>` : ''}
+    <div class="section-title">Na kolejny tydzień</div>
+    ${props.length ? `<div class="list form" id="proposals">${props.map((x) => `
+      <label class="row proposal">${x.apply ? `<input type="checkbox" data-id="${x.id}" checked style="width:auto">` : icon('info', 'icon-sm')}
+        <span class="grow small">${esc(x.text)}</span></label>`).join('')}</div>`
+      : '<p class="muted small" style="margin:0 4px 12px">Wszystko idzie zgodnie z planem. Trzymaj kurs.</p>'}
+    <button class="btn" id="review-done">${icon('check', 'icon-sm')} ${props.some((x) => x.apply) ? 'Zastosuj zaznaczone' : 'Zamknij przegląd'}</button>
+    <p class="muted small" style="margin:12px 4px">Zmiany kalorii idą przez tempo i sposób liczenia zapotrzebowania w profilu, więc zawsze możesz je cofnąć w Diecie → Cel i makro.</p>
+  `, { back: '#/today' });
+  document.getElementById('review-done').onclick = async () => {
+    for (const box of view.querySelectorAll('#proposals input:checked')) props.find((x) => x.id === box.dataset.id)?.apply();
+    data.settings.lastReviewDate = todayIso();
+    await save();
+    location.hash = '#/today';
+  };
 }
 
 // ---------- backup ----------
@@ -893,6 +1070,20 @@ function stopRest() {
   timer = null;
 }
 
+// Working sets of the last `n` workouts with this exercise, newest first.
+function recentSessions(exerciseId, n = 2) {
+  return data.workoutLogs.filter((l) => l.entries.some((e) => e.exerciseId === exerciseId))
+    .sort((a, b) => b.date.localeCompare(a.date) || b.id.localeCompare(a.id)).slice(0, n)
+    .map((l) => l.entries.filter((e) => e.exerciseId === exerciseId).flatMap((e) => e.sets).filter((x) => !x.warmup));
+}
+
+function progressionHint(exerciseId, targetReps = null) {
+  if (data.settings.autoProgression === false || NO_1RM_CATEGORIES.has(exInfo(exerciseId).cat)) return null;
+  const info = exInfo(exerciseId);
+  const hint = progression(recentSessions(exerciseId), { targetReps, step: isBarbell(info.name, info.desc) ? 2.5 : 2 });
+  return hint && { ...hint, reason: `${fmt(hint.kg, 2)} kg: ${hint.reason}` };
+}
+
 function newDraft(program, week, session) {
   const main = session.blocks.find((b) => b.type === 'main')?.items ?? session.blocks.flatMap((b) => b.items);
   return {
@@ -901,12 +1092,16 @@ function newDraft(program, week, session) {
     startedAt: Date.now(),
     entries: main.map((it) => {
       const prev = previousSets(it.exerciseId)?.sets ?? [];
+      // A weight from the plan (kg or %1RM) wins; otherwise progression from the last sessions.
+      const planned = suggestedKg(it);
+      const hint = planned == null ? progressionHint(it.exerciseId, defaultReps(it)) : null;
       return {
         exerciseId: it.exerciseId,
         restSec: it.restSec ?? 90,
         plan: itemChips(it),
+        ...(hint ? { hint: hint.reason } : {}),
         sets: Array.from({ length: it.sets ?? 1 }, (_, i) => ({
-          kg: suggestedKg(it) ?? (prev[i] ?? prev.at(-1))?.kg ?? null, reps: defaultReps(it), done: false,
+          kg: planned ?? hint?.kg ?? (prev[i] ?? prev.at(-1))?.kg ?? null, reps: defaultReps(it), done: false,
         })),
       };
     }),
@@ -1015,6 +1210,7 @@ function drawLog(draft, back) {
           </div>
           ${exInfo(en.exerciseId).desc ? `<div class="desc clamp">${esc(exInfo(en.exerciseId).desc)}</div>` : ''}
           ${en.plan ? `<div class="meta">${en.plan}</div>` : ''}
+          ${en.hint ? `<div class="small hint">${icon('trending-up', 'icon-xs')} Propozycja ${esc(en.hint)}</div>` : ''}
           ${prev ? `<div class="small muted prev-hint">Pod numerem serii: wynik z ${dateLabel(prev.date)}</div>` : ''}
           <div class="sets" id="sets-${e}">${en.sets.map((set, i) => setRow(e, i, set)).join('')}</div>
           ${en.showPlates ? platesLine(en, e) : ''}
@@ -1116,13 +1312,14 @@ function drawLog(draft, back) {
       if (!name) return;
       const exerciseId = exerciseIdFromName(name);
       const prev = previousSets(exerciseId)?.sets ?? [];
-      const fresh = (n) => Array.from({ length: n }, (_, i) => ({ kg: (prev[i] ?? prev.at(-1))?.kg ?? null, reps: (prev[i] ?? prev.at(-1))?.reps ?? null, done: false }));
+      const hint = progressionHint(exerciseId);
+      const fresh = (n) => Array.from({ length: n }, (_, i) => ({ kg: hint?.kg ?? (prev[i] ?? prev.at(-1))?.kg ?? null, reps: (prev[i] ?? prev.at(-1))?.reps ?? null, done: false }));
       if (swapIndex != null) {
         const en = draft.entries[swapIndex];
-        draft.entries[swapIndex] = { ...en, exerciseId, plan: '', sets: fresh(Math.max(en.sets.length, 1)), note: en.note };
+        draft.entries[swapIndex] = { ...en, exerciseId, plan: '', hint: hint?.reason, sets: fresh(Math.max(en.sets.length, 1)), note: en.note };
         swapIndex = null;
       } else {
-        draft.entries.push({ exerciseId, restSec: 90, plan: '', sets: fresh(3) });
+        draft.entries.push({ exerciseId, restSec: 90, plan: '', ...(hint ? { hint: hint.reason } : {}), sets: fresh(3) });
       }
       await save();
       await persist();
@@ -1346,9 +1543,17 @@ function viewProfile() {
       <div class="list form">
         <label class="row"><span class="grow">Cel</span><select name="goal">${Object.entries(GOALS).map(([k, v]) => opt(k, v, p.goal)).join('')}</select></label>
         <label class="row"><span class="grow">Tempo zmiany wagi</span><select name="weeklyRatePct">
-          ${[0.25, 0.5, 0.75, 1].map((r) => opt(r, `${String(r).replace('.', ',')}% masy / tydzień`, p.weeklyRatePct ?? (p.goal === 'gain' ? 0.25 : 0.5))).join('')}
+          ${[...new Set([0.25, 0.5, 0.75, 1, p.weeklyRatePct].filter(Boolean))].sort((a, b) => a - b).map((r) => opt(r, `${String(r).replace('.', ',')}% masy / tydzień`, p.weeklyRatePct ?? (p.goal === 'gain' ? 0.25 : 0.5))).join('')}
         </select></label>
+        <label class="row"><span class="grow">Waga docelowa (kg)</span><input name="goalWeightKg" inputmode="decimal" value="${p.goalWeightKg ?? ''}" placeholder="opcjonalnie"></label>
+        <label class="row"><span class="grow">Do kiedy</span><input name="goalDate" type="date" value="${p.goalDate ?? ''}"></label>
       </div>
+      <div class="section-title">Makro wg dnia treningowego</div>
+      <div class="list form">
+        <label class="row"><span class="grow">Więcej węglowodanów w dni treningowe</span><input type="checkbox" name="carbCycling" ${p.carbCycling ? 'checked' : ''} style="width:auto"></label>
+        <div class="row weekdays">${['Pn', 'Wt', 'Śr', 'Cz', 'Pt', 'So', 'Nd'].map((d, i) => `<label><input type="checkbox" name="day" value="${i + 1}" ${(p.trainingDays ?? defaultTrainingDays(currentWeek()?.week.sessions.length)).includes(i + 1) ? 'checked' : ''}><span>${d}</span></label>`).join('')}</div>
+      </div>
+      <p class="muted small" style="margin:0 4px 16px">W dni treningowe więcej węglowodanów (paliwo na trening), w pozostałe mniej. Białko i tłuszcze bez zmian, suma kalorii w tygodniu ta sama.</p>
       <div class="section-title">Aktywność</div>
       <div class="list form">
         <label class="row"><span class="grow">Źródło</span><select name="activitySource">
@@ -1372,7 +1577,13 @@ function viewProfile() {
       heightCm: num('heightCm'), weightKg: num('weightKg'), bodyFatPct: num('bodyFatPct'),
       birthDate: f.get('birthDate') || null, sex: f.get('sex'), goal: f.get('goal'),
       weeklyRatePct: num('weeklyRatePct'), activitySource: f.get('activitySource'), activityLevel: f.get('activityLevel'),
+      goalWeightKg: num('goalWeightKg'), goalDate: f.get('goalDate') || null,
+      carbCycling: f.get('carbCycling') === 'on', trainingDays: f.getAll('day').map(Number),
     };
+    if (next.goalWeightKg != null && !(next.goalWeightKg > 30 && next.goalWeightKg < 300)) {
+      alert('Sprawdź wagę docelową.');
+      return;
+    }
     if (!(next.heightCm > 100 && next.heightCm < 250) || !(next.weightKg > 30 && next.weightKg < 300)) {
       alert('Sprawdź wzrost i wagę.');
       return;
@@ -1567,7 +1778,7 @@ function saveFood(food) {
 }
 
 function viewDiet(date = todayIso()) {
-  const t = targets();
+  const t = targetsFor(date);
   const entries = dayEntries(date);
   const total = sumMacros(entries);
   const isToday = date === todayIso();
@@ -1587,7 +1798,7 @@ function viewDiet(date = todayIso()) {
       <a class="icon-btn" href="#/diet/${shiftDate(date, 1)}" aria-label="Następny dzień">${icon('chevron-right', 'icon-sm')}</a>
     </div>
     <div class="card">
-      <p>${t ? `Cel ${fmt(t.kcal)} kcal · ${GOALS[t.goal]}` : 'Uzupełnij profil, aby wyliczyć cel'}</p>
+      <p>${t ? `Cel ${fmt(t.kcal)} kcal · ${GOALS[t.goal]}${t.carbShift != null ? ` · ${t.trainingDay ? 'dzień treningowy' : 'dzień bez treningu'} (${t.carbShift > 0 ? '+' : '−'}${fmt(Math.abs(t.carbShift))} g węgli)` : ''}` : 'Uzupełnij profil, aby wyliczyć cel'}</p>
       <h2 style="font-size:34px">${fmt(total.kcal)} <span class="muted" style="font-size:17px;font-weight:500">kcal zjedzone</span></h2>
       ${left != null ? `<p class="small">${left >= 0 ? `Zostało ${fmt(left)} kcal` : `Przekroczono o ${fmt(-left)} kcal`}</p>` : ''}
       <div class="macros">
@@ -2388,6 +2599,7 @@ const ROUTES = [
   [/^#\/food\/new\/(\d{4}-\d{2}-\d{2})\/(\w+)$/, (d, m) => viewFood('new', d, m), 'diet'],
   [/^#\/food\/([\w-]+)$/, (id) => viewFood(id), 'diet'],
   [/^#\/progress$/, viewProgress, 'progress'],
+  [/^#\/review$/, viewReview, 'progress'],
   [/^#\/measure$/, viewMeasure, 'progress'],
   [/^#\/history\/([^/]+)$/, viewHistory, 'progress'],
   [/^#\/settings$/, viewSettings, null],

@@ -371,3 +371,12 @@ code { font-size: 13px; background: var(--bg); padding: 1px 5px; border-radius: 
 .icon-xs { width: 14px; height: 14px; vertical-align: -2px; }
 .fav { color: var(--fat); fill: var(--fat); }
 .muted a { color: var(--accent); }
+.hint { margin-top: 6px; color: var(--good); font-weight: 500; }
+.weekdays { justify-content: space-between; gap: 4px; }
+.weekdays label { flex: 1; }
+.weekdays input { display: none; }
+.weekdays span { display: grid; place-items: center; min-height: 36px; border-radius: 9px; background: var(--bg); font-size: 14px; font-weight: 600; color: var(--muted); }
+.weekdays input:checked + span { background: var(--accent); color: #fff; }
+.proposal { align-items: flex-start; }
+.proposal .icon-sm, .proposal input { margin-top: 2px; }
+a.link-btn { text-decoration: none; }

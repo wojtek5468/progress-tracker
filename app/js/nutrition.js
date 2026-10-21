@@ -186,3 +186,52 @@ export function computeTargets(profile, logs, adaptive = null) {
     weeklyChangeKg: Math.round(w * ratePct / 100 * 100) / 100,
   };
 }
+
+// Training-day macros: carbohydrates move from rest days to training days, protein and fat
+// stay the same and the weekly total of calories does not change. Rest days lose a quarter
+// of their carbs; training days get that energy back, capped at +40% carbs.
+export const REST_DAY_CARB_CUT = 0.25;
+export function dayTargets(t, trainingDay, trainingDaysPerWeek) {
+  const n = trainingDaysPerWeek;
+  if (!t || !(n > 0 && n < 7)) return t;
+  const restCut = Math.min(round(t.carbs * REST_DAY_CARB_CUT, 5), round((7 - n) ? t.carbs * 0.4 * n / (7 - n) : 0, 5));
+  const shift = trainingDay ? round(restCut * (7 - n) / n, 5) : -restCut;
+  const carbs = Math.max(0, t.carbs + shift);
+  return { ...t, carbs, kcal: t.kcal + (carbs - t.carbs) * 4, carbShift: carbs - t.carbs, trainingDay };
+}
+
+// Default training weekdays (1 = Monday … 7 = Sunday) for a number of sessions per week.
+export function defaultTrainingDays(perWeek) {
+  return ({ 1: [3], 2: [1, 4], 3: [1, 3, 5], 4: [1, 2, 4, 5], 5: [1, 2, 3, 5, 6], 6: [1, 2, 3, 4, 5, 6] })[perWeek] ?? [1, 3, 5];
+}
+
+// Weight goal with a date: how fast you need to go and when you get there at the current pace.
+// `ratePerWeek` is the trend's weekly change in kg (negative = losing); dates are ISO strings.
+export function goalForecast({ currentKg, goalKg, goalDate, ratePerWeek, today }) {
+  if (!(currentKg > 0) || !(goalKg > 0)) return null;
+  const toGo = Math.round((goalKg - currentKg) * 10) / 10;
+  const daysLeft = goalDate ? dayNum(goalDate) - dayNum(today) : null;
+  const reached = Math.abs(toGo) < 0.3;
+  const neededPerWeek = daysLeft > 0 ? toGo / daysLeft * 7 : null;
+  const neededPct = neededPerWeek != null ? Math.abs(neededPerWeek) / currentKg * 100 : null;
+  // Pace counts only when it goes in the right direction.
+  const onWay = ratePerWeek != null && Math.sign(ratePerWeek) === Math.sign(toGo) && Math.abs(ratePerWeek) >= 0.05;
+  let eta = null;
+  if (!reached && onWay) {
+    const d = new Date(`${today}T12:00:00Z`);
+    d.setUTCDate(d.getUTCDate() + Math.round(toGo / ratePerWeek * 7));
+    eta = d.toISOString().slice(0, 10);
+  }
+  const status = reached ? 'reached'
+    : daysLeft != null && daysLeft <= 0 ? 'overdue'
+      : !onWay ? 'stalled'
+        : eta && goalDate && eta > goalDate ? 'behind' : 'on-track';
+  return { toGo, daysLeft, neededPerWeek, neededPct, eta, status };
+}
+
+// Weekly rate (in % of body weight, the unit of the profile setting) that meets the goal date,
+// limited to the safe 0.25–1% range. Null when there is no date or the goal is already reached.
+export function rateForGoal(forecast) {
+  if (!forecast || forecast.neededPct == null || forecast.status === 'reached') return null;
+  return Math.min(1, Math.max(0.25, Math.round(forecast.neededPct * 20) / 20));
+}

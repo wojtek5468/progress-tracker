@@ -1,5 +1,5 @@
 // Offline-first cache for the app shell. Bump VERSION when shipping changes.
-const VERSION = 'v11';
+const VERSION = 'v12';
 const SHELL = [
   './', 'index.html', 'styles.css', 'manifest.webmanifest',
   'js/app.js', 'js/db.js', 'js/icons.js', 'js/exercise-catalog.js', 'js/nutrition.js', 'js/foods-api.js', 'js/plan-templates.js', 'js/plan-templates-coach.js', 'js/recipes.js', 'js/usda-pl.js', 'js/scanner.js', 'js/off-local.js', 'js/training.js', 'js/search.js', 'js/migrate.js', 'js/health-text.js',
