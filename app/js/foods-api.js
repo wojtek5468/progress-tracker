@@ -23,9 +23,21 @@ function fromOff(p) {
   };
 }
 
+// Name search (search-a-licious). It sends no CORS headers (checked 2026-10-21), so the app
+// calls it through our Cloudflare Worker (tools/off-search-worker). Barcode lookups below
+// allow CORS and go straight to OFF.
+export const OFF_SEARCH_PROXY = 'https://off-search.wojtek5468.workers.dev';
+export const onlineSearch = Boolean(OFF_SEARCH_PROXY);
+
 export async function searchOff(query) {
-  const url = `https://search.openfoodfacts.org/search?q=${encodeURIComponent(query)}&langs=pl,en&page_size=25&fields=${OFF_FIELDS}`;
-  const res = await fetch(url);
+  const q = `${query} countries_tags:"en:poland"`;
+  const url = `${OFF_SEARCH_PROXY || 'https://search.openfoodfacts.org'}/search?q=${encodeURIComponent(q)}&langs=pl,en&page_size=25&fields=${OFF_FIELDS}`;
+  let res;
+  try {
+    res = await fetch(url);
+  } catch {
+    throw new Error('Wyszukiwanie po nazwie w Open Food Facts nie działa z przeglądarki. Zeskanuj albo wpisz kod kreskowy.');
+  }
   if (res.status === 429) throw new Error('Za dużo wyszukiwań. Odczekaj minutę.');
   if (!res.ok) throw new Error(`Open Food Facts odpowiedział błędem ${res.status}.`);
   const body = await res.json();
@@ -61,7 +73,7 @@ export async function searchUsda(query, apiKey) {
 
 // Adds or completes a product in Open Food Facts with the user's own OFF account
 // (https://world.openfoodfacts.org, free). Contributions are published under ODbL.
-// Returns true when OFF confirmed the save; null when the browser could not read the reply.
+// Returns true when OFF confirmed the save; null when the reply was not JSON.
 export async function submitToOff(food, { user, password }) {
   const body = new URLSearchParams({
     code: food.code,
@@ -84,17 +96,43 @@ export async function submitToOff(food, { user, password }) {
   if (food.brand) body.set('brands', food.brand);
   if (food.servingG) body.set('serving_size', `${food.servingG} g`);
   const url = 'https://world.openfoodfacts.org/cgi/product_jqm2.pl';
-  let res;
-  try {
-    res = await fetch(url, { method: 'POST', body });
-  } catch {
-    // Some browsers block reading the reply (CORS); the form is still delivered.
-    await fetch(url, { method: 'POST', body, mode: 'no-cors' });
-    return null;
-  }
+  // OFF answers with Access-Control-Allow-Origin: *, so the reply is readable (checked 2026-10-21).
+  const res = await fetch(url, { method: 'POST', body });
+  if (res.status === 403) throw new Error('Zły login lub hasło do Open Food Facts.');
   if (!res.ok) throw new Error(`Open Food Facts odpowiedział błędem ${res.status}.`);
   const json = await res.json().catch(() => null);
-  if (json && json.status !== 1) throw new Error(json.status_verbose === 'user not signed-in' || /password|login/i.test(json.status_verbose ?? '')
+  if (json && json.status !== 1) throw new Error(/signed-in|credentials|password|login/i.test(json.status_verbose ?? '')
     ? 'Zły login lub hasło do Open Food Facts.' : `Open Food Facts: ${json.status_verbose ?? 'nie zapisano'}.`);
   return json ? true : null;
+}
+
+// Shrinks a phone photo to at most 2000 px (OFF needs at least 640 px) and JPEG, so the
+// upload stays around 0.5 MB even on mobile data.
+async function shrinkPhoto(file) {
+  const img = await createImageBitmap(file);
+  const scale = Math.min(1, 2000 / Math.max(img.width, img.height));
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.round(img.width * scale);
+  canvas.height = Math.round(img.height * scale);
+  canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+  return new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.85));
+}
+
+// Adds a photo to a product in Open Food Facts. field: 'front' (package) or 'nutrition' (label).
+export async function uploadOffPhoto(code, field, file, { user, password }) {
+  const imagefield = `${field}_pl`;
+  const body = new FormData();
+  body.set('code', code);
+  body.set('imagefield', imagefield);
+  body.set('user_id', user);
+  body.set('password', password);
+  body.set(`imgupload_${imagefield}`, await shrinkPhoto(file), `${field}.jpg`);
+  const res = await fetch('https://world.openfoodfacts.org/cgi/product_image_upload.pl', { method: 'POST', body });
+  if (res.status === 403) throw new Error('Zły login lub hasło do Open Food Facts.');
+  if (!res.ok) throw new Error(`Open Food Facts odpowiedział błędem ${res.status}.`);
+  const json = await res.json().catch(() => null);
+  // A photo OFF already has comes back as an error too; that is fine for us.
+  if (json && json.status !== 'status ok' && !/already/i.test(json.error ?? '')) {
+    throw new Error(`Zdjęcie nie zostało przyjęte: ${json.error ?? json.status}.`);
+  }
 }

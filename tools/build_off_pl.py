@@ -4,7 +4,9 @@ Streams the full OFF export (tab-separated, gzip, ~1 GB) and keeps products sold
 Poland that have a name and energy per 100 g. Output is one JSON array per line, sorted
 by barcode so weekly rebuilds stay stable:
 
-    [code, name, brand, kcal, protein, fat, carbs, servingG, stores]
+    [code, name, brand, kcal, protein, fat, carbs, servingG, stores, scans]
+
+scans = how many people scanned it (popularity), used to rank search results.
 
 Data: Open Food Facts, Open Database License (ODbL) 1.0, https://world.openfoodfacts.org
 
@@ -54,12 +56,16 @@ def main(out_path, source=EXPORT_URL):
         code = (r.get('code') or '').strip()
         if not name or kcal is None or kcal > 900 or not code.isdigit():
             continue
-        brand = (r.get('brands') or '').split(',')[0].strip()
+        # The export dropped the free-text `brands` column; `brands_en` holds the display name.
+        brand = (r.get('brands') or r.get('brands_en') or '').split(',')[0].strip()
+        if brand == (r.get('brands_tags') or '').split(',')[0]:
+            brand = brand.split(':')[-1].replace('-', ' ').title()  # only a tag like "red-bull" was given
         stores = ', '.join(x.strip() for x in (r.get('stores') or '').split(',')[:3] if x.strip())
+        scans = int(num(r.get('unique_scans_n')) or 0)
         kept.append((
-            num(r.get('unique_scans_n')) or 0,
+            scans,
             [code, name[:120], brand[:60], kcal, num(r.get('proteins_100g')) or 0, num(r.get('fat_100g')) or 0,
-             num(r.get('carbohydrates_100g')) or 0, num(r.get('serving_quantity')), stores[:50]],
+             num(r.get('carbohydrates_100g')) or 0, num(r.get('serving_quantity')), stores[:50], scans],
         ))
     kept.sort(key=lambda x: -x[0])
     products = sorted((p for _, p in kept[:LIMIT]), key=lambda p: p[0])
