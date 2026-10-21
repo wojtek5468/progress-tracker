@@ -338,3 +338,36 @@ code { font-size: 13px; background: var(--bg); padding: 1px 5px; border-radius: 
 .bar.vol i { position: absolute; top: 0; bottom: 0; background: var(--accent-soft); border-left: 1px dashed var(--accent); border-right: 1px dashed var(--accent); }
 .bar.vol span { position: relative; }
 .bar.vol > span { background: var(--accent); opacity: .85; }
+
+/* Today: one main action, kcal/protein rings, quick actions */
+.rings { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; color: inherit; text-decoration: none; }
+.ring { position: relative; display: grid; justify-items: center; }
+.ring svg { width: 116px; height: 116px; }
+.ring circle { fill: none; stroke-width: 8; stroke-linecap: round; }
+.ring circle.track { stroke: var(--bg); }
+.ring-text { position: absolute; top: 0; height: 116px; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+.ring-text b { font-size: 22px; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+.ring-text span { font-size: 12px; color: var(--muted); }
+.ring-label { margin-top: 4px; font-size: 13px; font-weight: 600; color: var(--muted); }
+.quick { display: flex; gap: 8px; margin-bottom: 12px; }
+.quick a {
+  flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 10px 4px;
+  border-radius: 12px; background: var(--card); color: var(--accent); text-decoration: none; font-size: 13px; font-weight: 600;
+}
+.stats.three { grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.stats.three .stat { padding: 12px; }
+.stats.three .value { font-size: 20px; }
+.notice { background: var(--accent-soft); }
+.notice p { color: var(--text); }
+.notice-actions { display: grid; grid-template-columns: 2fr 1fr; gap: 8px; margin-top: 12px; }
+.notice-actions .btn { min-height: 44px; }
+
+/* Logger: warm-up sets and plate calculator */
+.set-row.warmup .set-no { color: var(--accent); }
+.set-row.warmup input { font-size: 15px; }
+.chip.warmup { color: var(--muted); }
+.plates { margin-top: 10px; }
+.rest-bar #rest-more { padding: 8px 10px; }
+.icon-xs { width: 14px; height: 14px; vertical-align: -2px; }
+.fav { color: var(--fat); fill: var(--fat); }
+.muted a { color: var(--accent); }

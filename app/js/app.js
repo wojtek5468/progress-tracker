@@ -2,15 +2,18 @@ import { icon } from './icons.js';
 import * as db from './db.js';
 import { CATALOG, CATEGORIES } from './exercise-catalog.js';
 import { computeTargets, SOURCES, GOALS, ACTIVITY, weightTrend, trendRate, adaptiveTdee, ADAPTIVE_MIN_DAYS } from './nutrition.js';
-import { searchOff, onlineSearch, searchUsda, lookupBarcode, submitToOff, uploadOffPhoto } from './foods-api.js';
+import { searchOff, searchUsda, lookupBarcode, submitToOff, uploadOffPhoto } from './foods-api.js';
 import { TEMPLATES, PLACES, AUDIENCES, forAudience, buildProgram, templateExerciseIds, templatePreview } from './plan-templates.js';
 import { scanBarcode } from './scanner.js';
-import { loadLocal, localCount, searchLocal, localByCode } from './off-local.js';
+import { loadLocal, searchLocal, localByCode } from './off-local.js';
 import { RECIPES, INGREDIENTS, recipeTotals, recipePer100, isVege } from './recipes.js';
+import { estimate1RM, round25, platesPerSide, warmupSets, isBarbell, DEFAULT_BAR_KG, DEFAULT_PLATES } from './training.js';
+import { rankByText } from './search.js';
+import { SCHEMA_VERSION, migrate, checkImport } from './migrate.js';
+import { parseHealthText } from './health-text.js';
 
 const MEALS = { breakfast: 'Śniadanie', lunch: 'Obiad', dinner: 'Kolacja', snack: 'Przekąski' };
 
-const SCHEMA_VERSION = 1;
 const view = document.getElementById('view');
 const titleEl = document.getElementById('title');
 const backBtn = document.getElementById('back');
@@ -54,36 +57,6 @@ function setData(d) {
   exerciseById = new Map((d?.exercises ?? []).map((e) => [e.id, e]));
 }
 
-// Fill in fields added after the first seed format so older files keep working.
-function migrate(d) {
-  d.settings ??= {};
-  d.workoutLogs ??= [];
-  d.oneRepMaxes ??= [];
-  d.exercises ??= [];
-  d.programs ??= [];
-  d.dailyLogs ??= [];
-  d.foods ??= [];
-  d.mealTemplates ??= [];
-  d.foodLog ??= {};
-  const p = (d.profile ??= {});
-  const lastBody = [...(d.bodyMeasurements ?? [])].reverse().find((m) => m.bodyFatPct);
-  p.bodyFatPct ??= lastBody?.bodyFatPct ?? null;
-  p.goal ??= 'reduction';
-  p.activitySource ??= (d.dailyLogs ?? []).some((l) => l.activeKcal != null) ? 'health' : 'manual';
-  p.activityLevel ??= 'light';
-  // Neutral names for the blocks imported from the workbook (only if the user has not renamed them).
-  for (const prog of d.programs) {
-    const name = LEGACY_PROGRAM_NAMES[prog.id];
-    if (name && prog.name === name[0]) prog.name = name[1];
-  }
-}
-
-const LEGACY_PROGRAM_NAMES = {
-  'blok-1': ['Blok 1 (z trenerem)', 'Cykl roczny (35 tyg.)'],
-  'blok-2': ['Blok 2.0', 'Powrót do siły (3 tyg.)'],
-  'solo': ['SOLO', 'Siła + kondycja (2 tyg.)'],
-};
-
 function render(title, html, { back = null } = {}) {
   titleEl.textContent = title;
   backBtn.hidden = !back;
@@ -112,13 +85,9 @@ function lastWithin(list, key, days) {
 }
 
 const avg = (xs) => xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null;
-const round25 = (kg) => Math.round(kg / 2.5) * 2.5;
 const todayIso = () => new Date().toLocaleDateString('sv-SE');
 const save = () => db.set('data', data);
 const sessionKey = (programId, weekNumber, order) => `${programId}/${weekNumber}/${order}`;
-
-// Epley; reliable only up to ~10 reps.
-const estimate1RM = (kg, reps) => reps === 1 ? kg : kg * (1 + reps / 30);
 
 function current1RM(exerciseId) {
   const rows = (data.oneRepMaxes ?? []).filter((m) => m.exerciseId === exerciseId);
@@ -131,7 +100,7 @@ function current1RM(exerciseId) {
 function previousSets(exerciseId, beforeDate = '9999') {
   const logs = (data.workoutLogs ?? []).filter((l) => l.date < beforeDate && l.entries.some((e) => e.exerciseId === exerciseId));
   const last = logs.sort((a, b) => a.date.localeCompare(b.date) || a.id.localeCompare(b.id)).at(-1);
-  return last ? { date: last.date, sets: last.entries.filter((e) => e.exerciseId === exerciseId).flatMap((e) => e.sets) } : null;
+  return last ? { date: last.date, sets: last.entries.filter((e) => e.exerciseId === exerciseId).flatMap((e) => e.sets).filter((x) => !x.warmup) } : null;
 }
 
 function suggestedKg(item) {
@@ -162,11 +131,6 @@ function ensureExercise(name) {
   return id;
 }
 
-function nextSession(program, week) {
-  const done = new Set((data.workoutLogs ?? []).map((l) => l.sessionKey));
-  return week.sessions.find((s) => !done.has(sessionKey(program.id, week.number, s.order))) ?? week.sessions[0];
-}
-
 // ---------- views ----------
 
 function viewEmpty() {
@@ -190,59 +154,104 @@ function viewEmpty() {
   bindImport();
 }
 
+// Meal that fits the time of day, for the "add a meal" shortcut.
+function mealNow(date = new Date()) {
+  const h = date.getHours() + date.getMinutes() / 60;
+  return h < 11 ? 'breakfast' : h < 16 ? 'lunch' : h < 21 ? 'dinner' : 'snack';
+}
+
+function ring(value, goal, color, label, unit) {
+  const r = 34;
+  const c = 2 * Math.PI * r;
+  const pct = goal ? Math.min(1, value / goal) : 0;
+  const over = goal && value > goal * 1.05;
+  return `<div class="ring">
+    <svg viewBox="0 0 80 80" aria-hidden="true"><circle cx="40" cy="40" r="${r}" class="track"/>
+      ${pct > 0 ? `<circle cx="40" cy="40" r="${r}" class="fill" style="stroke:${over ? '#ff3b30' : color}" stroke-dasharray="${(pct * c).toFixed(1)} ${c.toFixed(1)}" transform="rotate(-90 40 40)"/>` : ''}</svg>
+    <div class="ring-text"><b>${fmt(value)}</b><span>${goal ? `z ${fmt(goal)} ${unit}` : unit}</span></div>
+    <div class="ring-label">${label}</div>
+  </div>`;
+}
+
+// One main action for right now: the workout in progress, today's planned workout or the next meal.
 async function viewToday() {
   const draft = await db.get('draft');
+  const backupDays = await backupDue();
   const cw = currentWeek();
+  const today = todayIso();
   const logs = data.dailyLogs ?? [];
-  const steps7 = avg(lastWithin(logs, 'steps', 7));
   const sleep7 = avg(lastWithin(logs, 'sleepMin', 7));
-  const weight = data.profile.weightKg;
-  const kcal = targets()?.kcal;
-  const today = new Date().toLocaleDateString('pl-PL', { weekday: 'long', day: 'numeric', month: 'long' });
+  const t = targets();
+  const eaten = sumMacros(dayEntries(today));
+  const meal = mealNow();
   const lastLog = data.workoutLogs.at(-1);
-  const stepsToday = dayLog(todayIso())?.steps ?? null;
-  const eaten = sumMacros(dayEntries(todayIso()));
+  const trainedToday = data.workoutLogs.some((l) => l.date === today);
+  const stepsToday = dayLog(today)?.steps ?? null;
+  const done = new Set(data.workoutLogs.map((l) => l.sessionKey));
+  const next = cw && cw.week.sessions.find((s) => !done.has(sessionKey(cw.program.id, cw.week.number, s.order)));
+  const left = t ? Math.round(t.kcal - eaten.kcal) : null;
 
   let hero;
-  if (!cw) {
-    hero = `<div class="card hero"><h2>Nie masz jeszcze planu</h2><p>Wybierz gotowy plan i dopasuj go do siebie albo ułóż własny.</p>
-      <a class="btn" href="#/templates">${icon('calendar-days', 'icon-sm')} Gotowe plany</a>
-      <a class="btn secondary" style="margin-top:8px" href="#/plans">${icon('plus', 'icon-sm')} Własny plan</a></div>`;
-
+  if (draft) {
+    hero = { p: esc(draft.title), href: draftHash(draft), icon: 'timer', label: 'Wróć do treningu' };
+  } else if (next && !trainedToday) {
+    hero = {
+      p: `${esc(cw.program.name)} · tydzień ${cw.week.number}${cw.week.label ? ` · ${esc(cw.week.label)}` : ''}`,
+      h: esc(sessionTitle(next)), sub: esc(sessionSummary(next)),
+      href: `#/log/${sessionKey(cw.program.id, cw.week.number, next.order)}`, icon: 'play', label: 'Zacznij trening',
+    };
   } else {
-    const { program, week } = cw;
-    const next = nextSession(program, week);
-    hero = `<div class="card hero">
-      <p>${esc(program.name)} · tydzień ${week.number}${week.label ? ` · ${esc(week.label)}` : ''}</p>
-      <h2>${week.sessions.length} ${week.sessions.length === 1 ? 'trening' : 'treningi'} w tym tygodniu</h2>
-      ${draft
-        ? `<a class="btn" href="${draftHash(draft)}">${icon('timer', 'icon-sm')} Wróć do trwającego treningu</a>`
-        : next ? `<a class="btn" href="#/log/${sessionKey(program.id, week.number, next.order)}">${icon('play', 'icon-sm')} Zacznij: ${esc(sessionTitle(next))}</a>`
-          : `<a class="btn" href="#/week/${program.id}/${week.number}">${icon('plus', 'icon-sm')} Dodaj trening</a>`}
-    </div>
-    ${sessionList(program, week)}`;
+    const status = trainedToday ? 'Trening na dziś zrobiony.' : cw && !next ? 'Wszystkie treningi z tego tygodnia zrobione.' : '';
+    hero = {
+      p: [status, left != null ? (left >= 0 ? `Zostało ${fmt(left)} kcal` : `Ponad cel o ${fmt(-left)} kcal`) : ''].filter(Boolean).join(' '),
+      href: `#/food-add/${today}/${meal}`, icon: 'plus', label: `Dodaj: ${MEALS[meal]}`,
+    };
   }
-  hero += `<a class="list row" href="#/log-free">${icon('plus', 'icon-sm')}<div class="grow"><div class="title">${draft?.sessionKey === FREE_KEY ? 'Wróć do treningu bez planu' : 'Trening bez planu'}</div>
-    <div class="sub">Sam wybierasz ćwiczenia w trakcie</div></div><span class="chev">${icon('chevron-right', 'icon-sm')}</span></a>`;
 
   render('Dziś', `
-    <p class="muted small date-line">${esc(today)}</p>
-    ${hero}
+    <p class="muted small date-line">${esc(new Date().toLocaleDateString('pl-PL', { weekday: 'long', day: 'numeric', month: 'long' }))}</p>
+    ${backupDays != null ? `<div class="card notice">
+      <p>${backupDays === Infinity ? 'Nie masz jeszcze kopii danych.' : `Ostatnia kopia danych: ${backupDays} dni temu.`} Dane są tylko na tym telefonie; kopia w Plikach (iCloud) chroni je przed utratą.</p>
+      <div class="notice-actions"><button class="btn" id="backup-now">${icon('download', 'icon-sm')} Zapisz kopię</button><button class="btn secondary" id="backup-later">Później</button></div>
+    </div>` : ''}
+    <div class="card hero">
+      ${hero.p ? `<p>${hero.p}</p>` : ''}
+      ${hero.h ? `<h2>${hero.h}</h2>` : ''}
+      ${hero.sub ? `<p class="small">${hero.sub}</p>` : ''}
+      <a class="btn" href="${hero.href}">${icon(hero.icon, 'icon-sm')} ${hero.label}</a>
+    </div>
+    <a class="card rings" href="#/diet">
+      ${ring(eaten.kcal, t?.kcal, 'var(--accent)', 'Kalorie', 'kcal')}
+      ${ring(eaten.p, t?.protein, 'var(--good)', 'Białko', 'g')}
+    </a>
+    <div class="quick">
+      ${hero.icon === 'plus' ? '' : `<a href="#/food-add/${today}/${meal}">${icon('apple', 'icon-sm')}<span>Posiłek</span></a>`}
+      <a href="#/measure">${icon('scale', 'icon-sm')}<span>Ważenie</span></a>
+      ${draft ? '' : `<a href="#/log-free">${icon('dumbbell', 'icon-sm')}<span>Bez planu</span></a>`}
+      ${cw ? '' : `<a href="#/templates">${icon('calendar-days', 'icon-sm')}<span>Wybierz plan</span></a>`}
+    </div>
+    <div class="stats three">
+      <a class="stat" href="#/steps"><div class="label">${icon('footprints', 'icon-sm')} Kroki</div><div class="value">${fmt(stepsToday)}</div>
+        <div class="bar thin"><span style="width:${Math.min(100, Math.round((stepsToday ?? 0) / stepsGoal() * 100))}%"></span></div></a>
+      <div class="stat"><div class="label">${icon('moon', 'icon-sm')} Sen</div><div class="value">${sleep7 ? `${Math.floor(sleep7 / 60)}<span class="unit">h</span>${Math.round(sleep7 % 60)}` : '–'}</div></div>
+      <a class="stat" href="#/progress"><div class="label">${icon('scale', 'icon-sm')} Waga</div><div class="value">${fmt(data.profile.weightKg, 1)}</div></a>
+    </div>
+    ${cw ? `<div class="section-title">Ten tydzień</div>${sessionList(cw.program, cw.week)}` : ''}
     ${lastLog ? `<a class="list row" href="#/history/${lastLog.id}">${icon('check', 'icon-sm')}
       <div class="grow"><div class="title">Ostatni trening</div><div class="sub">${dateLabel(lastLog.date)} · ${esc(lastLog.title)}</div></div>
       <span class="chev">${icon('chevron-right', 'icon-sm')}</span></a>` : ''}
-    <div class="section-title">Podsumowanie</div>
-    <div class="stats">
-      <a class="stat" href="#/steps"><div class="label">${icon('footprints', 'icon-sm')} Kroki dziś</div><div class="value">${fmt(stepsToday)}</div>
-        <div class="bar thin"><span style="width:${Math.min(100, Math.round((stepsToday ?? 0) / stepsGoal() * 100))}%"></span></div>
-        <div class="sub small muted">średnio ${fmt(steps7)} · cel ${fmt(stepsGoal())}</div></a>
-      <div class="stat"><div class="label">${icon('moon', 'icon-sm')} Sen</div><div class="value">${sleep7 ? `${Math.floor(sleep7 / 60)}<span class="unit">h</span> ${Math.round(sleep7 % 60)}<span class="unit">min</span>` : '–'}</div></div>
-      <a class="stat" href="#/profile"><div class="label">${icon('scale', 'icon-sm')} Waga</div><div class="value">${fmt(weight, 1)}<span class="unit">kg</span></div></a>
-      <a class="stat" href="#/diet"><div class="label">${icon('flame', 'icon-sm')} Zjedzone</div><div class="value">${fmt(eaten.kcal)}<span class="unit">/ ${fmt(kcal)}</span></div>
-        <div class="bar thin"><span style="width:${kcal ? Math.min(100, Math.round(eaten.kcal / kcal * 100)) : 0}%;background:var(--accent)"></span></div>
-        <div class="sub small muted">białko ${fmt(eaten.p)} / ${fmt(targets()?.protein)} g</div></a>
-
-    </div>`);
+  `);
+  document.getElementById('backup-now')?.addEventListener('click', async () => {
+    try {
+      if (await exportBackup()) route();
+    } catch (err) {
+      alert(`Nie udało się zapisać kopii: ${err.message}`);
+    }
+  });
+  document.getElementById('backup-later')?.addEventListener('click', async () => {
+    await db.set('backupSnooze', new Date(Date.now() + 3 * 864e5).toISOString());
+    route();
+  });
 }
 
 const plansSwitch = (active) => `<div class="segmented" role="tablist">
@@ -577,7 +586,7 @@ function volumeCard() {
     if (l.date < cutoff) continue;
     for (const en of l.entries) {
       const cat = exInfo(en.exerciseId).cat;
-      if (cat in counts) counts[cat] += en.sets.length;
+      if (cat in counts) counts[cat] += en.sets.filter((x) => !x.warmup).length;
     }
   }
   const max = Math.max(24, ...Object.values(counts));
@@ -670,42 +679,63 @@ function viewProgress() {
       ${[...data.workoutLogs].reverse().slice(0, 30).map((l) => `
         <a class="row" href="#/history/${l.id}">
           <div class="grow"><div class="title">${esc(l.title)}</div>
-          <div class="sub">${dateLabel(l.date)} · ${l.entries.reduce((n, e) => n + e.sets.length, 0)} serii · ${fmt(l.volumeKg)} kg objętości</div></div>
+          <div class="sub">${dateLabel(l.date)} · ${l.entries.reduce((n, e) => n + e.sets.filter((x) => !x.warmup).length, 0)} serii · ${fmt(l.volumeKg)} kg objętości</div></div>
           <span class="chev">${icon('chevron-right', 'icon-sm')}</span>
         </a>`).join('')}
     </div>` : '<p class="muted small" style="margin:0 4px">Brak zapisanych treningów. Zacznij trening z zakładki Dziś.</p>'}
   `);
 }
 
-function viewSettings() {
+async function viewSettings() {
   const p = data?.profile ?? {};
+  const last = await db.get('lastBackup');
+  const st = data?.settings ?? {};
   render('Ustawienia', `
     ${data ? `
     <div class="section-title">Profil i plany</div>
     <div class="list">
       <a class="row" href="#/profile"><span class="grow">Mój profil</span><span class="sub">${fmt(p.heightCm)} cm · ${fmt(p.weightKg, 1)} kg</span><span class="chev">${icon('chevron-right', 'icon-sm')}</span></a>
       <a class="row" href="#/exercises"><span class="grow">Ćwiczenia</span><span class="sub">${data.exercises.length}</span><span class="chev">${icon('chevron-right', 'icon-sm')}</span></a>
+    </div>
+    <div class="section-title">Trening</div>
+    <div class="list form">
+      <label class="row"><span class="grow">Dźwięk po przerwie</span><input type="checkbox" id="rest-sound" ${st.restSound === false ? '' : 'checked'} style="width:auto"></label>
+      <label class="row"><span class="grow">Sztanga (kg)</span><input id="bar-kg" inputmode="decimal" value="${fmt(st.barKg ?? DEFAULT_BAR_KG, 2)}"></label>
+      <label class="row stacked"><span>Talerze na Twojej siłowni (kg, oddziel średnikami)</span><input id="plates" value="${(st.plates ?? DEFAULT_PLATES).map((x) => fmt(x, 2)).join('; ')}"></label>
     </div>` : ''}
     <div class="section-title">Dane</div>
     <div class="list">
       ${data ? `<a class="row" href="#/steps"><span class="grow">Kroki i Zdrowie (Skróty)</span><span class="chev">${icon('chevron-right', 'icon-sm')}</span></a>` : ''}
       <label class="row">
 <span class="grow">Wczytaj plik danych</span>${icon('upload', 'icon-sm')}<input type="file" accept="application/json,.json" id="import"></label>
-      ${data ? `<a class="row" id="export" href="#"><span class="grow">Zapisz kopię zapasową</span>${icon('download', 'icon-sm')}</a>` : ''}
+      ${data ? `<a class="row" id="export" href="#"><span class="grow">Zapisz kopię zapasową</span><span class="sub">${last ? `ostatnio ${dateLabel(last)}` : 'jeszcze nie'}</span>${icon('download', 'icon-sm')}</a>` : ''}
     </div>
     ${data ? `<button class="btn danger" id="reset">${icon('trash-2', 'icon-sm')} Usuń dane z telefonu</button>` : ''}
     <p class="muted small" style="text-align:center;margin-top:24px">Ikony: Lucide (licencja ISC).<br>Dane są przechowywane wyłącznie na tym urządzeniu.</p>
   `, { back: '#/today' });
   bindImport();
-  document.getElementById('export')?.addEventListener('click', (e) => {
+  document.getElementById('export')?.addEventListener('click', async (e) => {
     e.preventDefault();
-    const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
-    const a = Object.assign(document.createElement('a'), {
-      href: URL.createObjectURL(blob),
-      download: `progress-backup-${new Date().toISOString().slice(0, 10)}.json`,
-    });
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    try {
+      if (await exportBackup()) route();
+    } catch (err) {
+      alert(`Nie udało się zapisać kopii: ${err.message}`);
+    }
+  });
+  document.getElementById('rest-sound')?.addEventListener('change', async (ev) => {
+    data.settings.restSound = ev.target.checked;
+    await save();
+  });
+  document.getElementById('bar-kg')?.addEventListener('change', async (ev) => {
+    const kg = Number(ev.target.value.replace(',', '.'));
+    if (kg >= 0 && kg < 50) data.settings.barKg = kg;
+    await save();
+  });
+  document.getElementById('plates')?.addEventListener('change', async (ev) => {
+    const plates = ev.target.value.split(/[;\s]+/).map((x) => Number(x.replace(',', '.'))).filter((x) => x > 0 && x <= 50);
+    data.settings.plates = plates.length ? [...new Set(plates)].sort((a, b) => b - a) : undefined;
+    await save();
+    route();
   });
   document.getElementById('reset')?.addEventListener('click', async () => {
     if (!confirm('Usunąć wszystkie dane z tego telefonu? Tej operacji nie można cofnąć.')) return;
@@ -716,15 +746,49 @@ function viewSettings() {
   });
 }
 
+// ---------- backup ----------
+
+const BACKUP_EVERY_DAYS = 7;
+
+// The only copy of the data lives in Safari's storage, so the app asks for a copy every week.
+// On iPhone the share sheet offers "Zapisz w Plikach" (iCloud Drive); elsewhere the file downloads.
+async function exportBackup() {
+  const name = `progress-kopia-${todayIso()}.json`;
+  const file = new File([JSON.stringify(data)], name, { type: 'application/json' });
+  if (navigator.canShare?.({ files: [file] })) {
+    try {
+      await navigator.share({ files: [file], title: 'Kopia danych Progress' });
+    } catch (err) {
+      if (err.name === 'AbortError') return false;
+      throw err;
+    }
+  } else {
+    const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(file), download: name });
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  }
+  await db.set('lastBackup', new Date().toISOString());
+  await db.del('backupSnooze');
+  return true;
+}
+
+// Days since the last copy, or null when no reminder is due.
+async function backupDue() {
+  const hasHistory = data.workoutLogs.length || Object.values(data.foodLog).some((x) => x.length) || data.bodyMeasurements.length;
+  if (!hasHistory) return null;
+  const [last, snooze] = await Promise.all([db.get('lastBackup'), db.get('backupSnooze')]);
+  if (snooze && snooze > new Date().toISOString()) return null;
+  const days = last ? Math.floor((Date.now() - new Date(last).getTime()) / 864e5) : Infinity;
+  return days >= BACKUP_EVERY_DAYS ? days : null;
+}
+
 function bindImport() {
   document.getElementById('import')?.addEventListener('change', async (e) => {
     const file = e.target.files[0];
     if (!file) return;
     try {
       const parsed = JSON.parse(await file.text());
-      if (parsed.schemaVersion !== SCHEMA_VERSION || !Array.isArray(parsed.programs)) {
-        throw new Error('To nie jest plik danych tej aplikacji.');
-      }
+      checkImport(parsed);
       parsed.settings ??= data?.settings ?? {};
       await db.set('data', parsed);
       await db.persist();
@@ -741,25 +805,82 @@ function bindImport() {
 
 let timer = null;
 
+// Keeps the screen on during a workout (Safari 16.4+). iOS drops the lock when the app goes to
+// the background, so it is taken again when the app comes back.
+let wakeLock = null;
+let wantAwake = false;
+async function keepAwake(on) {
+  wantAwake = on;
+  if (!on) {
+    wakeLock?.release().catch(() => {});
+    wakeLock = null;
+    return;
+  }
+  if (wakeLock || !navigator.wakeLock || document.visibilityState !== 'visible') return;
+  try {
+    const lock = await navigator.wakeLock.request('screen');
+    if (!wantAwake) return lock.release();
+    wakeLock = lock;
+    lock.addEventListener('release', () => { if (wakeLock === lock) wakeLock = null; });
+  } catch {
+    wakeLock = null;
+  }
+}
+document.addEventListener('visibilitychange', () => { if (wantAwake && document.visibilityState === 'visible') keepAwake(true); });
+
+// Two short beeps at the end of a rest. Safari plays Web Audio only after a tap, so the context
+// is resumed when a set is ticked and the beeps are scheduled ahead on the audio clock.
+let audio = null;
+function scheduleBeep(seconds) {
+  if (data.settings.restSound === false) return [];
+  try {
+    audio ??= new (window.AudioContext || window.webkitAudioContext)();
+    audio.resume();
+    const at = audio.currentTime + Math.max(0, seconds);
+    return [0, 0.3].map((offset) => {
+      const osc = audio.createOscillator();
+      const gain = audio.createGain();
+      osc.frequency.value = 880;
+      gain.gain.setValueAtTime(0.0001, at + offset);
+      gain.gain.exponentialRampToValueAtTime(0.35, at + offset + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, at + offset + 0.2);
+      osc.connect(gain).connect(audio.destination);
+      osc.start(at + offset);
+      osc.stop(at + offset + 0.22);
+      return osc;
+    });
+  } catch {
+    return [];
+  }
+}
+const cancelBeep = (oscs) => oscs?.forEach((o) => { try { o.disconnect(); } catch { /* already finished */ } });
+
 function startRest(seconds) {
   stopRest();
-  const until = Date.now() + seconds * 1000;
   const bar = document.createElement('div');
   bar.className = 'rest-bar';
-  bar.innerHTML = `${icon('timer')}<span class="grow">Przerwa</span><b id="rest-left"></b><button type="button" id="rest-skip">Pomiń</button>`;
+  bar.innerHTML = `${icon('timer')}<span class="grow">Przerwa</span><b id="rest-left"></b><button type="button" id="rest-more" aria-label="Dodaj 15 sekund">+15 s</button><button type="button" id="rest-skip">Pomiń</button>`;
   document.body.append(bar);
+  timer = { bar, until: Date.now() + seconds * 1000, beep: scheduleBeep(seconds) };
   bar.querySelector('#rest-skip').onclick = stopRest;
+  bar.querySelector('#rest-more').onclick = () => {
+    if (bar.classList.contains('done')) return;
+    timer.until += 15000;
+    cancelBeep(timer.beep);
+    timer.beep = scheduleBeep((timer.until - Date.now()) / 1000);
+    tick();
+  };
   const tick = () => {
-    const left = Math.max(0, Math.round((until - Date.now()) / 1000));
+    const left = Math.max(0, Math.round((timer.until - Date.now()) / 1000));
     bar.querySelector('#rest-left').textContent = `${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}`;
     if (left === 0) {
       bar.classList.add('done');
-      navigator.vibrate?.(300);
+      navigator.vibrate?.([200, 100, 200]);
       clearInterval(timer.interval);
       timer.timeout = setTimeout(stopRest, 4000);
     }
   };
-  timer = { bar, interval: setInterval(tick, 250) };
+  timer.interval = setInterval(tick, 250);
   tick();
 }
 
@@ -767,6 +888,7 @@ function stopRest() {
   if (!timer) return;
   clearInterval(timer.interval);
   clearTimeout(timer.timeout);
+  cancelBeep(timer.beep);
   timer.bar.remove();
   timer = null;
 }
@@ -849,13 +971,28 @@ function drawLog(draft, back) {
   let swapIndex = null;
   const persist = () => db.set('draft', draft);
   const prevOf = (en) => previousSets(en.exerciseId);
+  const barKg = () => data.settings.barKg ?? DEFAULT_BAR_KG;
+  const barbell = (en) => isBarbell(exInfo(en.exerciseId).name, exInfo(en.exerciseId).desc);
+  const workKg = (en) => Math.max(0, ...en.sets.filter((x) => !x.warmup).map((x) => x.kg ?? 0));
+  const canWarmUp = (en) => !en.sets.some((x) => x.warmup) && !NO_1RM_CATEGORIES.has(exInfo(en.exerciseId).cat);
+  // "60 kg: 15 + 5" for every working weight in the exercise, plates per side of the bar.
+  const platesLine = (en, e) => {
+    const weights = [...new Set(en.sets.map((x) => x.kg).filter((kg) => kg > 0))].sort((a, b) => a - b);
+    const parts = weights.map((kg) => {
+      const { plates, rest } = platesPerSide(kg, barKg(), data.settings.plates ?? DEFAULT_PLATES);
+      return `<span class="chip">${fmt(kg, 2)} kg: ${plates.length ? plates.map((x) => fmt(x, 2)).join(' + ') : 'sama sztanga'}${rest ? ` (brakuje ${fmt(rest, 2)} kg)` : ''}</span>`;
+    });
+    return `<div class="plates" id="plates-${e}"><div class="small muted">Talerze na każdą stronę · sztanga ${fmt(barKg(), 1)} kg</div><div class="meta">${parts.join('') || '<span class="small muted">Wpisz ciężar serii.</span>'}</div></div>`;
+  };
 
   const setRow = (e, i, set) => {
-    const p = prevOf(draft.entries[e])?.sets[i];
+    // Warm-up sets are marked "R" and do not count as working sets 1, 2, 3…
+    const n = draft.entries[e].sets.slice(0, i).filter((x) => !x.warmup).length;
+    const p = !set.warmup && prevOf(draft.entries[e])?.sets[n];
     const prev = p ? `<span class="prev">${p.kg ? `${fmt(p.kg, 2)}×${p.reps ?? '?'}` : `${p.reps ?? '?'} powt.`}</span>` : '';
     return `
-    <div class="set-row ${set.done ? 'done' : ''}">
-      <span class="set-no">${i + 1}${prev}</span>
+    <div class="set-row ${set.done ? 'done' : ''} ${set.warmup ? 'warmup' : ''}">
+      <span class="set-no">${set.warmup ? 'R' : n + 1}${prev}</span>
       <label><input type="text" inputmode="decimal" data-e="${e}" data-s="${i}" data-f="kg" value="${set.kg ?? ''}" aria-label="Ciężar w kg"><span>kg</span></label>
       <label><input type="text" inputmode="numeric" data-e="${e}" data-s="${i}" data-f="reps" value="${set.reps ?? ''}" aria-label="Powtórzenia"><span>powt.</span></label>
       <input class="rir" type="text" inputmode="numeric" data-e="${e}" data-s="${i}" data-f="rir" value="${set.rir ?? ''}" placeholder="RIR" aria-label="RIR, powtórzenia w zapasie">
@@ -880,8 +1017,11 @@ function drawLog(draft, back) {
           ${en.plan ? `<div class="meta">${en.plan}</div>` : ''}
           ${prev ? `<div class="small muted prev-hint">Pod numerem serii: wynik z ${dateLabel(prev.date)}</div>` : ''}
           <div class="sets" id="sets-${e}">${en.sets.map((set, i) => setRow(e, i, set)).join('')}</div>
+          ${en.showPlates ? platesLine(en, e) : ''}
           <div class="log-actions">
             <button type="button" class="link-btn" data-add="${e}">${icon('plus', 'icon-sm')} Dodaj serię</button>
+            ${canWarmUp(en) ? `<button type="button" class="link-btn" data-warmup="${e}">Rozgrzewka</button>` : ''}
+            ${barbell(en) ? `<button type="button" class="link-btn" data-plates="${e}">${en.showPlates ? 'Ukryj talerze' : 'Talerze'}</button>` : ''}
             ${en.note == null ? `<button type="button" class="link-btn" data-note-open="${e}">Notatka</button>` : ''}
           </div>
           ${en.note != null ? `<textarea class="note" data-note="${e}" rows="2" placeholder="Np. ból barku, za lekko, zmiana chwytu">${esc(en.note)}</textarea>` : ''}
@@ -910,6 +1050,7 @@ function drawLog(draft, back) {
       if (f == null) return;
       const v = ev.target.value.replace(',', '.').trim();
       draft.entries[e].sets[i][f] = v === '' ? null : Number(v);
+      if (f === 'kg' && draft.entries[e].showPlates) document.getElementById(`plates-${e}`).outerHTML = platesLine(draft.entries[e], e);
       persist();
     };
     view.onclick = async (ev) => {
@@ -918,17 +1059,36 @@ function drawLog(draft, back) {
       const swap = ev.target.closest('[data-swap]');
       const remove = ev.target.closest('[data-remove]');
       const noteOpen = ev.target.closest('[data-note-open]');
+      const warm = ev.target.closest('[data-warmup]');
+      const plates = ev.target.closest('[data-plates]');
+      if (warm) {
+        const en = draft.entries[Number(warm.dataset.warmup)];
+        if (!(workKg(en) > 0)) return alert('Najpierw wpisz ciężar serii roboczej.');
+        const first = en.sets.find((x) => !x.warmup && x.kg > 0);
+        const ramp = warmupSets(first.kg, { barKg: barKg(), barbell: barbell(en) });
+        if (!ramp.length) return alert('Przy tym ciężarze osobne serie rozgrzewkowe nie są potrzebne.');
+        en.sets.unshift(...ramp.map((x) => ({ ...x, warmup: true, done: false })));
+        await persist();
+        return draw();
+      }
+      if (plates) {
+        const en = draft.entries[Number(plates.dataset.plates)];
+        en.showPlates = !en.showPlates;
+        await persist();
+        return draw();
+      }
       if (done) {
         const [e, i] = done.dataset.done.split('/').map(Number);
         const set = draft.entries[e].sets[i];
         set.done = !set.done;
         done.closest('.set-row').classList.toggle('done', set.done);
-        if (set.done) startRest(draft.entries[e].restSec);
+        if (set.done) startRest(set.warmup ? Math.min(60, draft.entries[e].restSec) : draft.entries[e].restSec);
         persist();
       } else if (add) {
         const e = Number(add.dataset.add);
         const sets = draft.entries[e].sets;
-        sets.push({ ...(sets.at(-1) ?? { kg: null, reps: null }), done: false });
+        const last = [...sets].reverse().find((x) => !x.warmup) ?? sets.at(-1) ?? { kg: null, reps: null };
+        sets.push({ ...last, warmup: false, done: false });
         document.getElementById(`sets-${e}`).insertAdjacentHTML('beforeend', setRow(e, sets.length - 1, sets.at(-1)));
         persist();
       } else if (swap) {
@@ -977,6 +1137,7 @@ function drawLog(draft, back) {
     document.getElementById('finish').onclick = () => finishLog(draft);
   };
 
+  keepAwake(true);
   draw();
 }
 
@@ -984,7 +1145,8 @@ async function finishLog(draft) {
   const entries = draft.entries
     .map((en) => ({
       exerciseId: en.exerciseId,
-      sets: en.sets.filter((x) => x.done && (x.kg != null || x.reps != null)).map(({ kg, reps, rir }) => ({ kg, reps, ...(rir != null ? { rir } : {}) })),
+      sets: en.sets.filter((x) => x.done && (x.kg != null || x.reps != null))
+        .map(({ kg, reps, rir, warmup }) => ({ kg, reps, ...(rir != null ? { rir } : {}), ...(warmup ? { warmup: true } : {}) })),
       ...(en.note?.trim() ? { note: en.note.trim() } : {}),
     }))
     .filter((en) => en.sets.length);
@@ -999,12 +1161,12 @@ async function finishLog(draft) {
     title: draft.title,
     durationMin: Math.round((Date.now() - draft.startedAt) / 60000),
     entries,
-    volumeKg: Math.round(entries.flatMap((e) => e.sets).reduce((v, x) => v + (x.kg ?? 0) * (x.reps ?? 0), 0)),
+    volumeKg: Math.round(entries.flatMap((e) => e.sets).filter((x) => !x.warmup).reduce((v, x) => v + (x.kg ?? 0) * (x.reps ?? 0), 0)),
     records: [],
   };
   for (const en of entries) {
     const best = en.sets
-      .filter((x) => x.kg > 0 && x.reps > 0 && x.reps <= 10)
+      .filter((x) => !x.warmup && x.kg > 0 && x.reps > 0 && x.reps <= 10)
       .map((x) => ({ ...x, e1rm: estimate1RM(x.kg, x.reps) }))
       .sort((a, b) => b.e1rm - a.e1rm)[0];
     const prev = current1RM(en.exerciseId);
@@ -1039,7 +1201,7 @@ function viewHistory(id) {
       ${log.entries.map((en) => `
         <div class="ex">
           <div class="name">${esc(exName(en.exerciseId))}</div>
-          <div class="meta">${en.sets.map((s) => `<span class="chip">${fmt(s.kg, 2)} kg × ${s.reps ?? '?'}${s.rir != null ? ` · RIR ${s.rir}` : ''}</span>`).join('')}</div>
+          <div class="meta">${en.sets.map((s) => `<span class="chip${s.warmup ? ' warmup' : ''}">${s.warmup ? 'R · ' : ''}${fmt(s.kg, 2)} kg × ${s.reps ?? '?'}${s.rir != null ? ` · RIR ${s.rir}` : ''}</span>`).join('')}</div>
           ${en.note ? `<div class="desc">${esc(en.note)}</div>` : ''}
         </div>`).join('')}
     </div>
@@ -1272,7 +1434,7 @@ function exerciseHistory(id) {
   for (const l of data.workoutLogs ?? []) {
     for (const en of l.entries) {
       if (en.exerciseId !== id) continue;
-      for (const st of en.sets) if (st.kg > 0 && st.reps > 0 && st.reps <= 10) put(l.date, estimate1RM(st.kg, st.reps));
+      for (const st of en.sets) if (!st.warmup && st.kg > 0 && st.reps > 0 && st.reps <= 10) put(l.date, estimate1RM(st.kg, st.reps));
     }
   }
   for (const m of data.oneRepMaxes ?? []) if (m.exerciseId === id) put(m.date, m.estimated1RM ?? m.weightKg);
@@ -1282,7 +1444,7 @@ function exerciseHistory(id) {
 function exerciseProgress(id, best) {
   const points = exerciseHistory(id);
   const logs = (data.workoutLogs ?? []).filter((l) => l.entries.some((e) => e.exerciseId === id)).slice(-5).reverse();
-  const sets = (data.workoutLogs ?? []).flatMap((l) => l.entries.filter((e) => e.exerciseId === id).flatMap((e) => e.sets));
+  const sets = (data.workoutLogs ?? []).flatMap((l) => l.entries.filter((e) => e.exerciseId === id).flatMap((e) => e.sets)).filter((x) => !x.warmup);
   const heaviest = sets.reduce((a, b) => ((b.kg ?? 0) > (a?.kg ?? 0) ? b : a), null);
   const mostReps = sets.reduce((a, b) => ((b.reps ?? 0) > (a?.reps ?? 0) ? b : a), null);
   return `
@@ -1395,6 +1557,7 @@ const shiftDate = (iso, days) => {
 };
 
 function saveFood(food) {
+  if (data.foods.includes(food)) return food;
   // Reuse a product already saved from the same database entry.
   const existing = food.code && data.foods.find((f) => f.source === food.source && f.code === food.code);
   if (existing) return existing;
@@ -1497,172 +1660,200 @@ function viewDiet(date = todayIso()) {
   };
 }
 
+// Basic foods from the recipe ingredients (USDA values, Polish names): instant and offline.
+const BASIC_FOODS = Object.entries(INGREDIENTS).map(([id, ing]) => ({ source: 'basic', code: id, name: ing.name, brand: null, per100: ing.per100 }));
+
+// One search over everything: my products and meals, basic foods and the Polish shop list
+// (offline, as you type); shops online and USDA on request or when little was found.
 function viewFoodAdd(date, meal) {
-  const state = { tab: data.settings.foodTab ?? 'mine', results: [], error: null, loading: false, query: '' };
+  const state = { query: '', groups: [], picks: [], error: null, loading: false, online: false, pendingCode: null };
   const label = MEALS[meal] ?? 'Posiłek';
   loadLocal();
+  const mineText = (f) => `${f.name} ${f.brand ?? ''}`;
+  const savedKey = (f) => `${f.source}:${f.code}`;
 
-  const resultRow = (f, i) => `
-    <button type="button" class="row food-row" data-pick="${i}">
-      <div class="grow"><div class="title">${esc(f.name)}</div>
+  const resultRow = (f) => {
+    state.picks.push(f);
+    return `<button type="button" class="row food-row" data-pick="${state.picks.length - 1}">
+      <div class="grow"><div class="title">${f.favorite ? `${icon('star', 'icon-xs fav')} ` : ''}${esc(f.name)}</div>
       <div class="sub">${f.brand ? `${esc(f.brand)} · ` : ''}${f.stores ? `${esc(f.stores)} · ` : ''}${fmt(f.per100.kcal)} kcal · B ${fmt(f.per100.p, 1)} · T ${fmt(f.per100.f, 1)} · W ${fmt(f.per100.c, 1)} /100 g</div></div>
       ${icon('plus', 'icon-sm')}
     </button>`;
-
-  const mine = () => {
-    const q = state.query.toLowerCase();
-    const templates = data.mealTemplates.filter((m) => !q || m.name.toLowerCase().includes(q));
-    const foods = data.foods.filter((f) => !q || `${f.name} ${f.brand ?? ''}`.toLowerCase().includes(q))
-      .sort((a, b) => (b.lastUsed ?? '').localeCompare(a.lastUsed ?? ''));
-    state.results = foods;
-    return `
-      ${templates.length ? `<div class="section-title">Zapisane posiłki</div><div class="list">
-        ${templates.map((m) => {
-          const sum = sumMacros(m.items);
-          return `<button type="button" class="row food-row" data-template="${m.id}">
-            <div class="grow"><div class="title">${esc(m.name)}</div><div class="sub">${m.items.length} ${m.items.length === 1 ? 'produkt' : m.items.length < 5 ? 'produkty' : 'produktów'} · ${fmt(sum.kcal)} kcal</div></div>
-            ${icon('plus', 'icon-sm')}</button>`;
-        }).join('')}</div>` : ''}
-      ${!q && foods.length > 8 ? `<div class="section-title">Ostatnio używane</div><div class="list">${foods.slice(0, 8).map(resultRow).join('')}</div>` : ''}
-      <div class="section-title">${!q && foods.length > 8 ? 'Wszystkie produkty' : 'Produkty'}</div>
-      ${foods.length ? `<div class="list">${foods.map(resultRow).join('')}</div>`
-        : '<p class="muted small" style="margin:0 4px">Brak zapisanych produktów. Wyszukaj w bazie lub dodaj własny.</p>'}`;
+  };
+  const templateRow = (m) => {
+    const sum = sumMacros(m.items);
+    return `<button type="button" class="row food-row" data-template="${m.id}">
+      <div class="grow"><div class="title">${esc(m.name)}</div><div class="sub">zapisany posiłek · ${m.items.length} ${m.items.length === 1 ? 'produkt' : m.items.length < 5 ? 'produkty' : 'produktów'} · ${fmt(sum.kcal)} kcal</div></div>
+      ${icon('plus', 'icon-sm')}</button>`;
   };
 
-  const body = () => {
-    if (state.tab === 'mine') return mine();
-    if (state.loading) return '<p class="muted" style="text-align:center;padding:24px">Szukam…</p>';
-    if (state.error) return `<p class="error-box">${esc(state.error)}</p>`;
-    if (!state.query) {
-      return `<p class="muted small" style="margin:8px 4px">${state.tab === 'off'
-        ? 'Produkty ze sklepów z bazy Open Food Facts, także marki Lidla, Biedronki czy Auchan. Wpisz nazwę, markę lub sklep (np. „jogurt pilos”) albo zeskanuj kod.'
-        : 'Produkty podstawowe z bazy USDA, np. „pierś z kurczaka surowa”, „ryż biały gotowany”. Nazwy tłumaczymy automatycznie; po dodaniu możesz je poprawić.'}</p>`;
+  // Groups shown before anything is typed: favourites, saved meals, recently used.
+  const startGroups = () => {
+    const recent = data.foods.filter((f) => f.lastUsed && !f.favorite).sort((a, b) => b.lastUsed.localeCompare(a.lastUsed)).slice(0, 12);
+    return [
+      ['Ulubione', data.foods.filter((f) => f.favorite).sort((a, b) => a.name.localeCompare(b.name, 'pl'))],
+      ['Zapisane posiłki', data.mealTemplates, 'template'],
+      ['Ostatnio używane', recent],
+    ];
+  };
+
+  // Offline sources; fast enough to run on every keystroke.
+  const searchOffline = async () => {
+    const q = state.query;
+    const mine = rankByText([...data.foods].sort((a, b) => Number(b.favorite ?? 0) - Number(a.favorite ?? 0) || (b.lastUsed ?? '').localeCompare(a.lastUsed ?? '')), q, mineText, 15);
+    const saved = new Set(data.foods.map(savedKey));
+    const meals = rankByText(data.mealTemplates, q, (m) => m.name, 5);
+    const basic = rankByText(BASIC_FOODS.filter((f) => !saved.has(savedKey(f))), q, (f) => f.name, 8);
+    const shop = (await searchLocal(q, 30)).filter((f) => !saved.has(savedKey(f)));
+    if (q !== state.query) return false;
+    state.groups = [['Zapisane posiłki', meals, 'template'], ['Moje produkty', mine], ['Podstawowe', basic], ['Ze sklepu', shop]];
+    return true;
+  };
+
+  const searchOnline = async () => {
+    state.loading = true;
+    state.online = true;
+    drawResults();
+    const q = state.query;
+    const [shop, usda] = await Promise.allSettled([searchOff(q), searchUsda(q, data.settings.usdaKey)]);
+    if (q !== state.query) return;
+    state.loading = false;
+    const seen = new Set([...data.foods.map(savedKey), ...state.groups.flatMap(([, list]) => list.map(savedKey))]);
+    const fresh = (r) => (r.status === 'fulfilled' ? r.value.filter((f) => !seen.has(savedKey(f))) : []);
+    state.groups.push(['Ze sklepu (internet)', fresh(shop)], ['Podstawowe (USDA)', fresh(usda)]);
+    const failed = [shop, usda].filter((r) => r.status === 'rejected');
+    if (failed.length === 2) state.error = failed[0].reason.message.includes('fetch') ? 'Brak połączenia z internetem. Wyniki powyżej są z telefonu.' : failed[0].reason.message;
+    drawResults();
+  };
+
+  const searchCode = async (code) => {
+    state.loading = true;
+    drawResults();
+    const known = data.foods.find((f) => f.code === code);
+    if (known) {
+      location.hash = `#/entry/${date}/new-${meal}-${known.id}`;
+      return;
     }
-    const hint = state.tab === 'off' ? ' Masz produkt w ręku? Zeskanuj kod kreskowy, sprawdzimy całą bazę Open Food Facts.' : '';
-    const more = onlineSearch
-      ? '<button type="button" class="link-btn" id="online-search" style="margin:4px">Nie ma? Szukaj też w internecie</button>'
-      : `<p class="muted small" style="margin:8px 4px">Nie ma?${hint}</p>`;
-    return state.results.length ? `<div class="list">${state.results.map(resultRow).join('')}</div>
-      ${state.local ? more : ''}`
-      : `<p class="muted small" style="margin:8px 4px">Nic nie znaleziono. Spróbuj innej nazwy albo dodaj własny produkt.${hint}</p>`;
-  };
-
-  const draw = () => {
-    render(`Dodaj: ${label}`, `
-      <div class="segmented">
-        ${[['mine', 'Moje'], ['off', 'Ze sklepu'], ['usda', 'Podstawowe']].map(([k, l]) => `<a href="#" data-tab="${k}" class="${state.tab === k ? 'active' : ''}">${l}</a>`).join('')}
-      </div>
-      <form class="card add-row" id="food-search">
-        <input type="search" name="q" value="${esc(state.query)}" placeholder="${state.tab === 'mine' ? 'Filtruj moje produkty…' : 'Nazwa produktu lub kod kreskowy'}" autocomplete="off" enterkeyhint="search">
-        <button type="button" class="icon-btn" id="scan" aria-label="Skanuj kod kreskowy">${icon('scan-barcode')}</button>
-        <button class="icon-btn accent" aria-label="Szukaj">${icon('chevron-right')}</button>
-      </form>
-      <div id="food-results">${body()}</div>
-      <details class="list" id="quick-box">
-        <summary><span class="grow">Szybki wpis (same kalorie)</span><span class="chev">${icon('chevron-right', 'icon-sm')}</span></summary>
-        <form id="quick-form" class="form">
-          <label class="row stacked"><span>Co to było (opcjonalnie)</span><input name="name" placeholder="np. obiad w restauracji"></label>
-          <label class="row"><span class="grow">Kalorie (kcal)</span><input name="kcal" inputmode="numeric" required></label>
-          <label class="row"><span class="grow">Białko (g)</span><input name="p" inputmode="decimal" placeholder="opcjonalnie"></label>
-          <label class="row"><span class="grow">Tłuszcze (g)</span><input name="f" inputmode="decimal" placeholder="opcjonalnie"></label>
-          <label class="row"><span class="grow">Węglowodany (g)</span><input name="c" inputmode="decimal" placeholder="opcjonalnie"></label>
-          <div class="row"><button class="btn" type="submit">${icon('plus', 'icon-sm')} Dodaj</button></div>
-        </form>
-      </details>
-      <div class="actions">
-        <a class="btn secondary" href="#/recipes/${date}/${meal}">Z przepisu</a>
-        <a class="btn secondary" href="#/food/new/${date}/${meal}" id="custom-food">${icon('plus', 'icon-sm')} Własny produkt</a>
-      </div>
-      ${state.tab !== 'mine' ? `<p class="muted small" style="text-align:center;margin-top:16px">Dane: ${state.tab === 'off'
-        ? '<a href="https://world.openfoodfacts.org" target="_blank" rel="noopener">Open Food Facts</a> (ODbL), wartości z etykiet wpisane przez użytkowników — sprawdź z opakowaniem.'
-        : '<a href="https://fdc.nal.usda.gov" target="_blank" rel="noopener">USDA FoodData Central</a> (domena publiczna).'}</p>` : ''}
-    `, { back: `#/diet/${date}` });
-    document.getElementById('food-search').onsubmit = (ev) => {
-      ev.preventDefault();
-      state.query = new FormData(ev.target).get('q').trim();
-      search();
-    };
-    document.getElementById('custom-food').onclick = () => { pendingBarcode = state.pendingCode ?? null; };
-    document.getElementById('online-search')?.addEventListener('click', () => search({ online: true }));
-    document.getElementById('quick-form').onsubmit = async (ev) => {
-      ev.preventDefault();
-      const f = new FormData(ev.target);
-      const n = (k) => {
-        const v = String(f.get(k) ?? '').replace(',', '.').trim();
-        return v === '' ? null : Number(v);
-      };
-      const kcal = n('kcal');
-      if (!(kcal > 0)) return;
-      dayEntries(date).push({
-        id: uid('e'), meal,
-        quick: { name: String(f.get('name')).trim() || 'Szybki wpis', kcal, p: n('p') ?? 0, f: n('f') ?? 0, c: n('c') ?? 0 },
-      });
-      await save();
-      location.hash = `#/diet/${date}`;
-    };
-    document.getElementById('scan').onclick = async () => {
-      let code;
-      try {
-        code = await scanBarcode();
-      } catch (err) {
-        state.error = err.message;
-        return draw();
-      }
-      if (!code) return;
-      // A product scanned before is already in "Moje"; otherwise ask Open Food Facts.
-      const known = data.foods.find((f) => f.code === code);
-      if (known) {
-        location.hash = `#/entry/${date}/new-${meal}-${known.id}`;
-        return;
-      }
-      state.tab = 'off';
-      state.query = code;
-      search();
-    };
-    view.onclick = onclick;
-  };
-  // Shop products: the offline Polish list first (instant, works without internet), then
-  // the online OFF search through our Worker when it is set up and the user asks for more.
-  const search = async ({ online = false } = {}) => {
-    state.pendingCode = null;
-    state.local = false;
-    if (state.tab === 'mine' || !state.query) return draw();
-    state.loading = true; state.error = null; draw();
-    const isCode = /^\d{8,14}$/.test(state.query);
+    let hit = null;
     try {
-      if (state.tab === 'usda') {
-        state.results = await searchUsda(state.query, data.settings.usdaKey);
-      } else if (isCode) {
-        const hit = await localByCode(state.query) ?? await lookupBarcode(state.query).catch(() => null);
-        state.results = hit ? [hit] : [];
-      } else {
-        const local = online ? [] : await searchLocal(state.query);
-        state.local = local.length > 0;
-        state.results = local.length || (!online && !onlineSearch && await localCount()) ? local : await searchOff(state.query);
-      }
+      hit = await localByCode(code) ?? await lookupBarcode(code);
     } catch (err) {
-      state.error = err.message.includes('fetch') ? 'Brak połączenia z bazą produktów.' : err.message;
+      state.error = err.message.includes('fetch') ? 'Brak połączenia z Open Food Facts.' : err.message;
     }
     state.loading = false;
-    if (state.tab === 'off' && isCode && !state.results.length && !state.error) {
-      state.error = `Produktu z kodem ${state.query} nie ma jeszcze w Open Food Facts. Dodaj go jako własny produkt (z etykiety), a potem możesz go wysłać do bazy, żeby znajomi też go znaleźli.`;
-      state.pendingCode = state.query;
+    state.groups = [['Ze sklepu', hit ? [hit] : []]];
+    if (!hit && !state.error) {
+      state.error = `Produktu z kodem ${code} nie ma jeszcze w Open Food Facts. Dodaj go jako własny produkt (z etykiety), a potem możesz go wysłać do bazy, żeby znajomi też go znaleźli.`;
+      state.pendingCode = code;
     }
-    draw();
+    drawResults();
   };
-  const onclick = async (ev) => {
-    const tab = ev.target.closest('[data-tab]');
+
+  const results = () => {
+    state.picks = [];
+    if (state.loading && !state.groups.length) return '<p class="muted" style="text-align:center;padding:24px">Szukam…</p>';
+    const groups = (state.query ? state.groups : startGroups()).filter(([, list]) => list.length);
+    const html = groups.map(([title, list, kind]) => `<div class="section-title">${title}</div>
+      <div class="list">${list.map((x) => (kind === 'template' ? templateRow(x) : resultRow(x))).join('')}</div>`).join('');
+    const count = groups.reduce((n, [, list]) => n + list.length, 0);
+    const empty = !state.query
+      ? '<p class="muted small" style="margin:8px 4px">Wpisz nazwę, markę lub sklep (np. „jogurt pilos”, „pierś z kurczaka”) albo zeskanuj kod. Polskie znaki nie są potrzebne.</p>'
+      : !count && !state.loading ? '<p class="muted small" style="margin:8px 4px">Nic nie znaleziono. Spróbuj innej nazwy albo dodaj własny produkt.</p>' : '';
+    const more = state.query && !state.online && !state.loading && !/^\d{8,14}$/.test(state.query)
+      ? `<button type="button" class="link-btn" id="online-search" style="margin:4px">${count ? 'Nie ma? ' : ''}Szukaj też w internecie</button>` : '';
+    return `${state.error ? `<p class="error-box">${esc(state.error)}</p>` : ''}${empty}${html}
+      ${state.loading ? '<p class="muted small" style="text-align:center;padding:12px">Szukam w internecie…</p>' : more}`;
+  };
+  const drawResults = () => {
+    document.getElementById('food-results').innerHTML = results();
+    document.getElementById('online-search')?.addEventListener('click', searchOnline);
+  };
+
+  render(`Dodaj: ${label}`, `
+    <form class="card add-row" id="food-search">
+      <input type="search" name="q" placeholder="Szukaj produktu lub posiłku" autocomplete="off" enterkeyhint="search" aria-label="Szukaj produktu">
+      <button type="button" class="icon-btn" id="scan" aria-label="Skanuj kod kreskowy">${icon('scan-barcode')}</button>
+    </form>
+    <div id="food-results"></div>
+    <details class="list" id="quick-box">
+      <summary><span class="grow">Szybki wpis (same kalorie)</span><span class="chev">${icon('chevron-right', 'icon-sm')}</span></summary>
+      <form id="quick-form" class="form">
+        <label class="row stacked"><span>Co to było (opcjonalnie)</span><input name="name" placeholder="np. obiad w restauracji"></label>
+        <label class="row"><span class="grow">Kalorie (kcal)</span><input name="kcal" inputmode="numeric" required></label>
+        <label class="row"><span class="grow">Białko (g)</span><input name="p" inputmode="decimal" placeholder="opcjonalnie"></label>
+        <label class="row"><span class="grow">Tłuszcze (g)</span><input name="f" inputmode="decimal" placeholder="opcjonalnie"></label>
+        <label class="row"><span class="grow">Węglowodany (g)</span><input name="c" inputmode="decimal" placeholder="opcjonalnie"></label>
+        <div class="row"><button class="btn" type="submit">${icon('plus', 'icon-sm')} Dodaj</button></div>
+      </form>
+    </details>
+    <div class="actions">
+      <a class="btn secondary" href="#/recipes/${date}/${meal}">Z przepisu</a>
+      <a class="btn secondary" href="#/food/new/${date}/${meal}" id="custom-food">${icon('plus', 'icon-sm')} Własny produkt</a>
+    </div>
+    <p class="muted small" style="text-align:center;margin-top:16px">Dane: <a href="https://world.openfoodfacts.org" target="_blank" rel="noopener">Open Food Facts</a> (ODbL, wartości z etykiet wpisane przez użytkowników, sprawdź z opakowaniem) i <a href="https://fdc.nal.usda.gov" target="_blank" rel="noopener">USDA FoodData Central</a> (domena publiczna).</p>
+  `, { back: `#/diet/${date}` });
+  drawResults();
+
+  const form = document.getElementById('food-search');
+  let debounce = null;
+  form.q.oninput = () => {
+    clearTimeout(debounce);
+    debounce = setTimeout(async () => {
+      state.query = form.q.value.trim();
+      state.online = false; state.error = null; state.pendingCode = null;
+      if (/^\d{8,14}$/.test(state.query) || !state.query) return drawResults();
+      if (await searchOffline()) drawResults();
+    }, 120);
+  };
+  form.onsubmit = async (ev) => {
+    ev.preventDefault();
+    clearTimeout(debounce);
+    form.q.blur();
+    state.query = form.q.value.trim();
+    state.online = false; state.error = null; state.pendingCode = null;
+    if (!state.query) return drawResults();
+    if (/^\d{8,14}$/.test(state.query)) return searchCode(state.query);
+    await searchOffline();
+    const count = state.groups.reduce((n, [, list]) => n + list.length, 0);
+    if (count < 5) return searchOnline();
+    drawResults();
+  };
+  document.getElementById('custom-food').onclick = () => { pendingBarcode = state.pendingCode ?? null; };
+  document.getElementById('quick-form').onsubmit = async (ev) => {
+    ev.preventDefault();
+    const f = new FormData(ev.target);
+    const n = (k) => {
+      const v = String(f.get(k) ?? '').replace(',', '.').trim();
+      return v === '' ? null : Number(v);
+    };
+    const kcal = n('kcal');
+    if (!(kcal > 0)) return;
+    dayEntries(date).push({
+      id: uid('e'), meal,
+      quick: { name: String(f.get('name')).trim() || 'Szybki wpis', kcal, p: n('p') ?? 0, f: n('f') ?? 0, c: n('c') ?? 0 },
+    });
+    await save();
+    location.hash = `#/diet/${date}`;
+  };
+  document.getElementById('scan').onclick = async () => {
+    let code;
+    try {
+      code = await scanBarcode();
+    } catch (err) {
+      state.error = err.message;
+      return drawResults();
+    }
+    if (!code) return;
+    form.q.value = code;
+    state.query = code;
+    state.error = null;
+    searchCode(code);
+  };
+  view.onclick = async (ev) => {
     const pick = ev.target.closest('[data-pick]');
     const tpl = ev.target.closest('[data-template]');
-    if (tab) {
-      ev.preventDefault();
-      state.tab = tab.dataset.tab;
-      data.settings.foodTab = state.tab;
-      state.results = []; state.error = null;
-      if (state.tab !== 'mine') state.query = '';
-      draw();
-    } else if (pick) {
-      const food = saveFood(state.results[Number(pick.dataset.pick)]);
+    if (pick) {
+      const food = saveFood(state.picks[Number(pick.dataset.pick)]);
       await save();
       location.hash = `#/entry/${date}/new-${meal}-${food.id}`;
     } else if (tpl) {
@@ -1672,8 +1863,9 @@ function viewFoodAdd(date, meal) {
       location.hash = `#/diet/${date}`;
     }
   };
-  draw();
 }
+
+const FOOD_SOURCES = { off: 'Open Food Facts', usda: 'USDA', basic: 'produkt podstawowy (USDA)', recipe: 'przepis' };
 
 function viewEntry(date, entryId) {
   // New entries arrive as "new-<meal>-<foodId>"; existing ones by their id.
@@ -1686,7 +1878,7 @@ function viewEntry(date, entryId) {
   const per = food.per100;
   const calc = (g) => `${fmt(per.kcal * g / 100)} kcal · B ${fmt(per.p * g / 100, 1)} g · T ${fmt(per.f * g / 100, 1)} g · W ${fmt(per.c * g / 100, 1)} g`;
   render(food.name, `
-    <p class="muted small" style="margin:0 4px 12px">${food.brand ? `${esc(food.brand)} · ` : ''}${fmt(per.kcal)} kcal na 100 g · ${food.source === 'off' ? 'Open Food Facts' : food.source === 'usda' ? 'USDA' : 'mój produkt'}</p>
+    <p class="muted small" style="margin:0 4px 12px">${food.brand ? `${esc(food.brand)} · ` : ''}${fmt(per.kcal)} kcal na 100 g · ${FOOD_SOURCES[food.source] ?? 'mój produkt'}</p>
     <form id="entry-form">
       <div class="list form">
         <label class="row"><span class="grow">Ilość (g)</span><input name="grams" inputmode="decimal" value="${grams}" required autofocus></label>
@@ -1697,8 +1889,16 @@ function viewEntry(date, entryId) {
       <button class="btn" type="submit">${icon('check', 'icon-sm')} ${isNew ? 'Dodaj' : 'Zapisz'}</button>
     </form>
     ${isNew ? '' : `<button class="btn danger" id="delete-entry" style="margin-top:12px">${icon('trash-2', 'icon-sm')} Usuń z dziennika</button>`}
-    <a class="btn secondary" style="margin-top:12px" href="#/food/${food.id}">Edytuj produkt</a>
+    <div class="actions">
+      <button type="button" class="btn secondary" id="favorite">${icon('star', 'icon-sm')} ${food.favorite ? 'Usuń z ulubionych' : 'Dodaj do ulubionych'}</button>
+      <a class="btn secondary" href="#/food/${food.id}">Edytuj produkt</a>
+    </div>
   `, { back: `#/diet/${date}` });
+  document.getElementById('favorite').onclick = async () => {
+    food.favorite = !food.favorite || undefined;
+    await save();
+    document.getElementById('favorite').innerHTML = `${icon('star', 'icon-sm')} ${food.favorite ? 'Usuń z ulubionych' : 'Dodaj do ulubionych'}`;
+  };
   const form = document.getElementById('entry-form');
   form.grams.oninput = () => {
     const g = Number(form.grams.value.replace(',', '.'));
@@ -1894,26 +2094,6 @@ function setDayValues(date, values) {
 
 const dayLog = (date) => (data.dailyLogs ?? []).find((l) => l.date === date);
 const stepsGoal = () => data.settings.stepsGoal ?? 8000;
-
-// Parses text copied by the iOS Shortcut, e.g. "kroki=8 512 kcal=430,5 sen=7,2 tetno=58 waga=87,6 tluszcz=27".
-// Every key is optional; numbers may use a comma and spaces as in Polish formatting.
-function parseHealthText(text) {
-  const grab = (key, digits = 0) => {
-    const m = text.match(new RegExp(`(?:${key})\\s*[=:]\\s*([\\d\\s\\u00a0.,]+)`, 'i'));
-    if (!m) return null;
-    const v = Number(m[1].replace(/[\s\u00a0]/g, '').replace(',', '.'));
-    return Number.isFinite(v) && v > 0 ? Math.round(v * 10 ** digits) / 10 ** digits : null;
-  };
-  const sleepH = grab('sen|sleep', 2);
-  return {
-    steps: grab('kroki|steps'),
-    activeKcal: grab('kcal|energia'),
-    sleepMin: sleepH != null ? Math.round(sleepH * 60) : null,
-    restingHr: grab('tetno|tętno|hr'),
-    weightKg: grab('waga|weight', 1),
-    bodyFatPct: grab('tluszcz|tłuszcz|fat', 1),
-  };
-}
 
 // Applies values from the Shortcut: daily totals go to the day log, weight to measurements.
 // One measurement row per day; new values are merged into it so weight and tape measurements can come separately.
@@ -2218,7 +2398,10 @@ const ROUTES = [
 
 function route() {
   const hash = location.hash || '#/today';
-  if (!hash.startsWith('#/log')) stopRest();
+  if (!hash.startsWith('#/log')) {
+    stopRest();
+    keepAwake(false);
+  }
   document.getElementById('tabbar').hidden = !data;
   if (!data && hash !== '#/settings') return viewEmpty();
   for (const [re, fn, tab] of ROUTES) {
