@@ -26,7 +26,7 @@ function fromOff(p) {
 // Name search (search-a-licious). It sends no CORS headers (checked 2026-10-21), so the app
 // calls it through our Cloudflare Worker (tools/off-search-worker). Barcode lookups below
 // allow CORS and go straight to OFF.
-export const OFF_SEARCH_PROXY = '';
+export const OFF_SEARCH_PROXY = 'https://off-search.wojtek5468.workers.dev';
 export const onlineSearch = Boolean(OFF_SEARCH_PROXY);
 
 export async function searchOff(query) {
