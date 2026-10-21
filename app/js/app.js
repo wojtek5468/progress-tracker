@@ -2724,19 +2724,9 @@ function viewSteps() {
       </div>
       <button class="btn secondary" type="submit">${icon('check', 'icon-sm')} Zapisz</button>
     </form>
-    <details class="list" style="margin-top:20px">
-      <summary><span class="grow">Jak połączyć ze Zdrowiem (iPhone)</span><span class="chev">${icon('chevron-right', 'icon-sm')}</span></summary>
-      <ul class="explain">
-        <li>Aplikacja w przeglądarce nie ma bezpośredniego dostępu do Zdrowia (Apple daje go tylko aplikacjom z App Store). Pomostem jest darmowa aplikacja <b>Skróty</b>.</li>
-        <li>W Skrótach utwórz nowy skrót „Zdrowie → Progress”.</li>
-        <li><b>Kroki:</b> akcja <b>Znajdź próbki zdrowia</b>, typ <i>Kroki</i>, data początkowa <i>jest dzisiaj</i>, a potem <b>Oblicz statystyki</b> → <i>Suma</i>. Tak samo dla <i>Energia aktywna</i>.</li>
-        <li><b>Waga i tkanka tłuszczowa</b> (np. z wagi Bluetooth): <b>Znajdź próbki zdrowia</b>, typ <i>Masa ciała</i>, sortuj <i>od najnowszych</i>, limit <i>1</i>. Tak samo dla <i>Procent tkanki tłuszczowej</i> i <i>Tętno spoczynkowe</i>.</li>
-        <li><b>Sen:</b> typ <i>Sen</i> (analiza snu) od wczoraj 18:00, potem <b>Oblicz statystyki</b> → <i>Suma</i> i zamień na godziny.</li>
-        <li>Na końcu akcja <b>Tekst</b>: <code>kroki=… kcal=… waga=… tluszcz=… tetno=… sen=…</code> (wstaw zmienne z kroków powyżej; każdą część możesz pominąć) i <b>Kopiuj do schowka</b>.</li>
-        <li>Uruchom skrót (np. z widżetu, przez stuknięcie w tył telefonu albo automatycznie wieczorem w <b>Automatyzacji</b>), otwórz Progress i stuknij „Wklej ze Skrótu”. Treningi z Apple Watch liczą się w aktywnych kcal.</li>
-        <li>Aktywne kcal z ostatnich 30 dni poprawiają też wyliczenie zapotrzebowania w Diecie. W wersji natywnej (App Store) synchronizacja będzie automatyczna.</li>
-      </ul>
-    </details>
+    <a class="list row" href="#/shortcut" style="margin-top:20px;color:inherit;text-decoration:none">
+      <span class="grow">Nie masz skrótu? Jak go zrobić (ok. 3 min)</span><span class="chev">${icon('chevron-right', 'icon-sm')}</span>
+    </a>
     <p class="muted small" style="margin:12px 4px">Cel 8000 kroków: korzyści zdrowotne rosną do ok. 8–10 tys. kroków dziennie u osób przed 60. r.ż. (Paluch i in., Lancet Public Health 2022).</p>
   `, { back: '#/today' });
   const form = document.getElementById('steps-form');
@@ -2758,9 +2748,11 @@ function viewSteps() {
     } catch {
       text = prompt('Wklej tekst ze Skrótu (np. kroki=8500 kcal=420)');
     }
-    const values = parseHealthText(text ?? '');
+    if (text == null) return;
+    const values = parseHealthText(text);
     if (Object.values(values).every((v) => v == null)) {
-      alert('W schowku nie ma danych ze Skrótu. Najpierw uruchom skrót „Zdrowie → Progress”.');
+      const seen = text.trim() ? `W schowku jest: „${text.trim().slice(0, 60)}”, a nie dane ze Skrótu.` : 'Schowek jest pusty.';
+      if (confirm(`${seen}\n\nNajpierw uruchom skrót „Zdrowie → Progress”. Nie masz go jeszcze? Pokazać, jak go zrobić?`)) location.hash = '#/shortcut';
       return;
     }
     applyHealthValues(today, values);
@@ -2768,6 +2760,54 @@ function viewSteps() {
     const got = [values.steps != null && 'kroki', values.activeKcal != null && 'kcal', values.sleepMin != null && 'sen', values.restingHr != null && 'tętno', values.weightKg && 'waga'].filter(Boolean);
     alert(`Zapisano: ${got.join(', ')}.`);
     route();
+  };
+}
+
+// Link iCloud do gotowego skrótu (Skróty → Udostępnij → Kopiuj łącze iCloud). Pusty: tylko instrukcja.
+const SHORTCUT_URL = '';
+const SHORTCUT_TEXT = 'kroki= kcal= waga=';
+
+function viewShortcut() {
+  render('Skrót Zdrowie', `
+    <p class="muted" style="margin:0 4px 12px">Aplikacja w przeglądarce nie może sama czytać Zdrowia (Apple pozwala na to tylko aplikacjom z App Store). Pomostem jest darmowa aplikacja <b>Skróty</b>, która jest już na iPhonie. Skrót robisz raz, potem wystarczy go uruchomić i stuknąć „Wklej ze Skrótu”.</p>
+    ${SHORTCUT_URL ? `<a class="btn link-btn" href="${SHORTCUT_URL}">${icon('download', 'icon-sm')} Dodaj gotowy skrót</a>
+      <p class="muted small" style="margin:8px 4px 16px">Otworzy się w Skrótach. Stuknij „Dodaj skrót”, a przy pierwszym uruchomieniu pozwól na dostęp do Zdrowia.</p>
+      <div class="section-title">Albo zrób go sam</div>` : '<div class="section-title">Zrób skrót (ok. 3 min)</div>'}
+    <div class="card">
+      <ol class="steps">
+        <li>Otwórz aplikację <b>Skróty</b>, stuknij <b>+</b> i nazwij skrót <b>Zdrowie → Progress</b>.</li>
+        <li><b>Kroki:</b> stuknij „Dodaj czynność”, wyszukaj <b>Znajdź próbki zdrowia</b> (ang. <i>Find Health Samples</i>). Ustaw <i>Typ</i>: <b>Kroki</b>, filtr <i>Data początkowa</i>: <b>jest dzisiaj</b>, a na dole <i>Grupuj według</i>: <b>Dzień</b>. Grupowanie sumuje kroki z iPhone'a i zegarka bez liczenia ich dwa razy.</li>
+        <li><b>Aktywne kcal</b> (opcjonalnie): dodaj drugą taką samą czynność, tylko z typem <b>Energia aktywna</b>.</li>
+        <li><b>Waga</b> (opcjonalnie): trzecia czynność z typem <b>Masa ciała</b>, bez filtra daty, <i>Sortuj według</i>: <b>Data początkowa</b>, <i>Kolejność</i>: <b>od najnowszych</b>, <i>Limit</i>: <b>1</b>.</li>
+        <li>Dodaj czynność <b>Tekst</b> i wpisz w niej to, co poniżej. Za każdym znakiem „=” wstaw zmienną: stuknij w tym miejscu i wybierz nad klawiaturą wynik odpowiedniej czynności (Próbki zdrowia). Części, których nie dodałeś, usuń.</li>
+      </ol>
+      <div class="row" style="gap:8px;margin:4px 0 8px 34px">
+        <code class="grow">${SHORTCUT_TEXT}</code>
+        <button class="btn secondary" id="copy-template" style="width:auto;padding:8px 12px;margin:0">${icon('clipboard-list', 'icon-sm')} Kopiuj</button>
+      </div>
+      <ol class="steps" start="6">
+        <li>Dodaj czynność <b>Kopiuj do schowka</b>.</li>
+        <li>Stuknij <b>▶</b>, żeby uruchomić skrót. Za pierwszym razem iOS zapyta o dostęp do Zdrowia: zaznacz kroki, energię i masę ciała i zezwól.</li>
+        <li>Wróć tutaj i stuknij <b>Wklej ze Skrótu</b>. Jeśli przeglądarka zapyta, stuknij <b>Wklej</b>.</li>
+      </ol>
+    </div>
+    <div class="section-title">Żeby było szybciej</div>
+    <ul class="explain">
+      <li>Dodaj skrót do ekranu początkowego albo jako widżet (przytrzymaj skrót → Udostępnij → Do ekranu początkowego).</li>
+      <li>Albo uruchamiaj go dwukrotnym stuknięciem w tył telefonu: Ustawienia → Dostępność → Dotyk → Stuknięcie w tył.</li>
+      <li>Możesz też dopisać <b>sen=</b>, <b>tetno=</b> (tętno spoczynkowe) i <b>tluszcz=</b> (procent tkanki tłuszczowej). Sen to suma z typu <i>Sen</i> od wczoraj 18:00, w godzinach.</li>
+      <li>Skrót możesz wysłać znajomym: przytrzymaj go → Udostępnij → Kopiuj łącze iCloud. Skrót nie zawiera Twoich danych, tylko same kroki do wykonania.</li>
+    </ul>
+    <p class="muted small" style="margin:12px 4px">Nazwy czynności mogą się nieznacznie różnić zależnie od wersji iOS.</p>
+  `, { back: '#/steps' });
+  const copyBtn = document.getElementById('copy-template');
+  copyBtn.onclick = async () => {
+    try {
+      await navigator.clipboard.writeText(SHORTCUT_TEXT);
+      copyBtn.textContent = 'Skopiowano';
+    } catch {
+      prompt('Skopiuj ten tekst:', SHORTCUT_TEXT);
+    }
   };
 }
 
@@ -2954,6 +2994,7 @@ const ROUTES = [
   [/^#\/recipe\/([\w-]+)$/, (id) => viewRecipe(id), 'diet'],
   [/^#\/recipe\/([\w-]+)\/(\d{4}-\d{2}-\d{2})\/(\w+)$/, viewRecipe, 'diet'],
   [/^#\/steps$/, viewSteps, 'today'],
+  [/^#\/shortcut$/, viewShortcut, 'today'],
   [/^#\/templates$/, viewTemplates, 'plans'],
   [/^#\/template\/([\w-]+)$/, viewTemplate, 'plans'],
   [/^#\/food\/new\/(\d{4}-\d{2}-\d{2})\/(\w+)$/, (d, m) => viewFood('new', d, m), 'diet'],
