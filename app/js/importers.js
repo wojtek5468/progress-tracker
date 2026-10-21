@@ -165,17 +165,37 @@ async function pipe(bytes, stream) {
   return new Uint8Array(await new Response(new Blob([bytes]).stream().pipeThrough(stream)).arrayBuffer());
 }
 
-// Plan → short text for a link (deflate + base64url). The plan travels in the link itself,
+// Any JSON → short text for a link (deflate + base64url). It travels in the link itself,
 // after "#", so no server ever sees it.
-export async function encodePlan(plan) {
-  const json = new TextEncoder().encode(JSON.stringify(plan));
+export async function encodeData(value) {
+  const json = new TextEncoder().encode(JSON.stringify(value));
   return `z${toBase64Url(await pipe(json, new CompressionStream('deflate-raw')))}`;
 }
 
-export async function decodePlan(text) {
+export async function decodeData(text) {
   const bytes = fromBase64Url(text.slice(1));
   const json = text[0] === 'z' ? await pipe(bytes, new DecompressionStream('deflate-raw')) : bytes;
-  const plan = JSON.parse(new TextDecoder().decode(json));
+  return JSON.parse(new TextDecoder().decode(json));
+}
+
+export const encodePlan = encodeData;
+
+export async function decodePlan(text) {
+  const plan = await decodeData(text);
   if (plan?.v !== 1 || !Array.isArray(plan.weeks) || typeof plan.name !== 'string') throw new Error('Link nie zawiera planu treningowego.');
   return plan;
+}
+
+// A recipe reduced to what a friend needs; ingredients carry their values per 100 g.
+export function sharedRecipe(r) {
+  return {
+    v: 1, kind: 'recipe', name: r.name, meals: r.meals, minutes: r.minutes, portions: r.portions, steps: r.steps,
+    items: r.items.map(({ name, grams, per100 }) => ({ name, grams, per100: { kcal: per100.kcal, p: per100.p, f: per100.f, c: per100.c } })),
+  };
+}
+
+export async function decodeRecipe(text) {
+  const r = await decodeData(text);
+  if (r?.kind !== 'recipe' || !Array.isArray(r.items) || typeof r.name !== 'string') throw new Error('Link nie zawiera przepisu.');
+  return r;
 }

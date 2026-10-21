@@ -6,18 +6,23 @@ import { searchOff, searchUsda, lookupBarcode, submitToOff, uploadOffPhoto } fro
 import { TEMPLATES, PLACES, AUDIENCES, forAudience, buildProgram, templateExerciseIds, templatePreview } from './plan-templates.js';
 import { scanBarcode } from './scanner.js';
 import { loadLocal, searchLocal, localByCode } from './off-local.js';
-import { RECIPES, INGREDIENTS, recipeTotals, recipePer100, isVege } from './recipes.js';
 import { estimate1RM, round25, platesPerSide, warmupSets, isBarbell, progression, DEFAULT_BAR_KG, DEFAULT_PLATES } from './training.js';
 import { rankByText } from './search.js';
 import { SCHEMA_VERSION, migrate, checkImport } from './migrate.js';
 import { parseHealthText } from './health-text.js';
 import { workoutsFromCsv, EXERCISE_MAP, sharedPlan, encodePlan, decodePlan } from './importers.js';
-import { parseMealText, lineGrams, unitGrams, searchName, UNITS } from './measures.js';
+import { unitGrams } from './measures.js';
+import { BASIC_FOODS, mineText, savedKey, byUse, matchLines, regram } from './food-match.js';
 import { fitToTime, estimateMinutes, readiness, lighterSession } from './training-plus.js';
 import {
   exerciseMediaBlock, muscleCard, viewCalendar, streakLine, viewCardio, cardioSummary, shareWorkout, plateauCard,
   createNextBlock, swapSuggestions, exerciseFilters, matchesFilter, EQUIPMENT, equipmentOf,
 } from './views-training.js';
+import {
+  viewRecipes, viewRecipe, viewRecipeEdit, viewRecipeImport, viewMealPlan, viewShopping, viewPhotos, allRecipes, waterCard, onWaterClick,
+  microsCard, mealTargetLine, addWater, budgetFor, budgetLine, closerCard, onCloserClick, costLine, proteinValueList,
+} from './views-diet.js';
+import { waterGoalMl } from './diet-plus.js';
 import {
   MEALS, view, titleEl, backBtn, data, exerciseById, NO_1RM_CATEGORIES, BLOCK_NAMES, esc, fmt, exInfo, exName, uid, sessionTitle, targets, isoWeekday, isTrainingDay, targetsFor, weightPoints, dailyIntake, adaptive, dateLabel, setData, render, currentWeek, sessionSummary, lastWithin, avg, todayIso, save, sessionKey, current1RM, previousSets, suggestedKg, defaultReps, ensureExercise, foodById, entryMacros, sumMacros, dayEntries, shiftDate, saveFood,
 } from './core.js';
@@ -265,6 +270,7 @@ async function viewToday() {
       <a href="#/measure">${icon('scale', 'icon-sm')}<span>Ważenie</span></a>
       ${draft ? '' : `<a href="#/log-free">${icon('dumbbell', 'icon-sm')}<span>Bez planu</span></a>`}
       <a href="#/cardio">${icon('bike', 'icon-sm')}<span>Cardio</span></a>
+      <button type="button" id="water-quick">${icon('droplet', 'icon-sm')}<span>Woda ${fmt((dayLog(today)?.waterMl ?? 0) / 1000, 2)} l</span></button>
       ${cw ? '' : `<a href="#/templates">${icon('calendar-days', 'icon-sm')}<span>Wybierz plan</span></a>`}
     </div>
     <div class="stats three">
@@ -285,6 +291,11 @@ async function viewToday() {
       alert(`Nie udało się zapisać kopii: ${err.message}`);
     }
   });
+  document.getElementById('water-quick').onclick = async () => {
+    addWater(today, 250);
+    await save();
+    route();
+  };
   document.getElementById('backup-later')?.addEventListener('click', async () => {
     await db.set('backupSnooze', new Date(Date.now() + 3 * 864e5).toISOString());
     route();
@@ -820,6 +831,8 @@ function viewProgress() {
     ${plateauCard()}
     <a class="list row" href="#/calendar">${icon('calendar', 'icon-sm')}<div class="grow"><div class="title">Kalendarz treningów</div>
       <div class="sub">${streakLine() || 'Dni z treningami i seria tygodni'}</div></div><span class="chev">${icon('chevron-right', 'icon-sm')}</span></a>
+    <a class="list row" href="#/photos">${icon('camera', 'icon-sm')}<div class="grow"><div class="title">Zdjęcia sylwetki</div>
+      <div class="sub">Porównanie przed i po, tylko na tym telefonie</div></div><span class="chev">${icon('chevron-right', 'icon-sm')}</span></a>
     ${muscleCard()}
     ${volumeCard()}
     <div class="section-title">Rekordy 1RM</div>
@@ -1807,6 +1820,13 @@ function viewProfile() {
         <div class="row weekdays">${['Pn', 'Wt', 'Śr', 'Cz', 'Pt', 'So', 'Nd'].map((d, i) => `<label><input type="checkbox" name="day" value="${i + 1}" ${(p.trainingDays ?? defaultTrainingDays(currentWeek()?.week.sessions.length)).includes(i + 1) ? 'checked' : ''}><span>${d}</span></label>`).join('')}</div>
       </div>
       <p class="muted small" style="margin:0 4px 16px">W dni treningowe więcej węglowodanów (paliwo na trening), w pozostałe mniej. Białko i tłuszcze bez zmian, suma kalorii w tygodniu ta sama.</p>
+      <div class="section-title">Dieta</div>
+      <div class="list form">
+        <label class="row"><span class="grow">Budżet tygodnia</span><input type="checkbox" name="weeklyBudget" ${p.weeklyBudget ? 'checked' : ''} style="width:auto"></label>
+        <label class="row"><span class="grow">Cel kalorii przy każdym posiłku</span><input type="checkbox" name="mealTargets" ${data.settings.mealTargets !== false ? 'checked' : ''} style="width:auto"></label>
+        <label class="row"><span class="grow">Woda na dzień (ml)</span><input name="waterGoalMl" inputmode="numeric" value="${data.settings.waterGoalMl ?? ''}" placeholder="${waterGoalMl(p.weightKg)}"></label>
+      </div>
+      <p class="muted small" style="margin:0 4px 16px">Budżet tygodnia: gdy zjesz mniej lub więcej, różnica rozkłada się na kolejne dni do niedzieli (najwyżej ±15% dziennie). Dobre, gdy w weekend jesz więcej.</p>
       <div class="section-title">Aktywność</div>
       <div class="list form">
         <label class="row"><span class="grow">Źródło</span><select name="activitySource">
@@ -1832,7 +1852,10 @@ function viewProfile() {
       weeklyRatePct: num('weeklyRatePct'), activitySource: f.get('activitySource'), activityLevel: f.get('activityLevel'),
       goalWeightKg: num('goalWeightKg'), goalDate: f.get('goalDate') || null,
       carbCycling: f.get('carbCycling') === 'on', trainingDays: f.getAll('day').map(Number),
+      weeklyBudget: f.get('weeklyBudget') === 'on',
     };
+    data.settings.mealTargets = f.get('mealTargets') === 'on';
+    data.settings.waterGoalMl = num('waterGoalMl') || null;
     if (next.goalWeightKg != null && !(next.goalWeightKg > 30 && next.goalWeightKg < 300)) {
       alert('Sprawdź wagę docelową.');
       return;
@@ -2007,7 +2030,9 @@ function viewExercise(rawId) {
 
 
 function viewDiet(date = todayIso()) {
-  const t = targetsFor(date);
+  const base = targetsFor(date);
+  const budget = budgetFor(date);
+  const t = base && budget?.loggedDays ? { ...base, kcal: budget.target, carbs: Math.max(0, Math.round(base.carbs + budget.shift / 4)) } : base;
   const entries = dayEntries(date);
   const total = sumMacros(entries);
   const isToday = date === todayIso();
@@ -2030,6 +2055,7 @@ function viewDiet(date = todayIso()) {
       <p>${t ? `Cel ${fmt(t.kcal)} kcal · ${GOALS[t.goal]}${t.carbShift != null ? ` · ${t.trainingDay ? 'dzień treningowy' : 'dzień bez treningu'} (${t.carbShift > 0 ? '+' : '−'}${fmt(Math.abs(t.carbShift))} g węgli)` : ''}` : 'Uzupełnij profil, aby wyliczyć cel'}</p>
       <h2 style="font-size:34px">${fmt(total.kcal)} <span class="muted" style="font-size:17px;font-weight:500">kcal zjedzone</span></h2>
       ${left != null ? `<p class="small">${left >= 0 ? `Zostało ${fmt(left)} kcal` : `Przekroczono o ${fmt(-left)} kcal`}</p>` : ''}
+      ${budgetLine(date) ? `<p class="small muted">${budgetLine(date)}</p>` : ''}
       <div class="macros">
         ${bar('Białko', total.p, t?.protein, 'var(--protein)')}
         ${bar('Tłuszcze', total.f, t?.fat, 'var(--fat)')}
@@ -2040,7 +2066,7 @@ function viewDiet(date = todayIso()) {
       const items = entries.filter((e) => e.meal === meal);
       const sum = sumMacros(items);
       return `
-      <div class="section-title meal-head"><span>${label}</span><span>${items.length ? `${fmt(sum.kcal)} kcal` : ''}</span></div>
+      <div class="section-title meal-head"><span>${label}</span><span>${mealTargetLine(date, meal, items.length ? sum.kcal : 0) || (items.length ? `${fmt(sum.kcal)} kcal` : '')}</span></div>
       <div class="list">
         ${items.map((e) => {
           const food = foodById(e.foodId);
@@ -2066,13 +2092,18 @@ function viewDiet(date = todayIso()) {
         </div>
       </div>`;
     }).join('')}
+    <div style="margin-top:16px">${closerCard(date, total, t)}${waterCard(date)}${microsCard(date)}</div>
+    ${costLine(date) ? `<p class="muted small" style="margin:0 4px">${icon('wallet', 'icon-xs')} ${costLine(date)}</p>` : ''}
     <div class="list" style="margin-top:20px">
       <a class="row" href="#/nutrition"><span class="grow">Cel, makro i zalecenia</span><span class="chev">${icon('chevron-right', 'icon-sm')}</span></a>
-      <a class="row" href="#/recipes"><span class="grow">Przepisy</span><span class="sub">${RECIPES.length}</span><span class="chev">${icon('chevron-right', 'icon-sm')}</span></a>
+      <a class="row" href="#/mealplan"><span class="grow">Jadłospis i lista zakupów</span><span class="chev">${icon('chevron-right', 'icon-sm')}</span></a>
+      <a class="row" href="#/recipes"><span class="grow">Przepisy</span><span class="sub">${allRecipes().length}</span><span class="chev">${icon('chevron-right', 'icon-sm')}</span></a>
       <a class="row" href="#/foods"><span class="grow">Moje produkty i posiłki</span><span class="chev">${icon('chevron-right', 'icon-sm')}</span></a>
     </div>
   `);
   view.onclick = async (ev) => {
+    if (await onWaterClick(ev, date)) return;
+    if (await onCloserClick(ev, date)) return route();
     const copy = ev.target.closest('[data-copy-meal]');
     const del = ev.target.closest('[data-del-quick]');
     if (copy) {
@@ -2100,8 +2131,6 @@ function viewDiet(date = todayIso()) {
   };
 }
 
-// Basic foods from the recipe ingredients (USDA values, Polish names): instant and offline.
-const BASIC_FOODS = Object.entries(INGREDIENTS).map(([id, ing]) => ({ source: 'basic', code: id, name: ing.name, brand: null, per100: ing.per100 }));
 
 // One search over everything: my products and meals, basic foods and the Polish shop list
 // (offline, as you type); shops online and USDA on request or when little was found.
@@ -2109,8 +2138,6 @@ function viewFoodAdd(date, meal) {
   const state = { query: '', groups: [], picks: [], error: null, loading: false, online: false, pendingCode: null };
   const label = MEALS[meal] ?? 'Posiłek';
   loadLocal();
-  const mineText = (f) => `${f.name} ${f.brand ?? ''}`;
-  const savedKey = (f) => `${f.source}:${f.code}`;
 
   const resultRow = (f) => {
     state.picks.push(f);
@@ -2140,7 +2167,7 @@ function viewFoodAdd(date, meal) {
   // Offline sources; fast enough to run on every keystroke.
   const searchOffline = async () => {
     const q = state.query;
-    const mine = rankByText([...data.foods].sort((a, b) => Number(b.favorite ?? 0) - Number(a.favorite ?? 0) || (b.lastUsed ?? '').localeCompare(a.lastUsed ?? '')), q, mineText, 15);
+    const mine = rankByText([...data.foods].sort(byUse), q, mineText, 15);
     const saved = new Set(data.foods.map(savedKey));
     const meals = rankByText(data.mealTemplates, q, (m) => m.name, 5);
     const basic = rankByText(BASIC_FOODS.filter((f) => !saved.has(savedKey(f))), q, (f) => f.name, 8);
@@ -2289,6 +2316,7 @@ function viewFoodAdd(date, meal) {
         if (!o || !(x.grams > 0)) continue;
         const food = saveFood(o);
         food.lastUsed = new Date().toISOString();
+        food.uses = (food.uses ?? 0) + 1;
         dayEntries(date).push({ id: uid('e'), meal, foodId: food.id, grams: x.grams });
       }
       await save();
@@ -2297,16 +2325,7 @@ function viewFoodAdd(date, meal) {
   };
   document.getElementById('text-form').onsubmit = async (ev) => {
     ev.preventDefault();
-    await loadLocal();
-    textLines = await Promise.all(parseMealText(ev.target.text.value).map(async (line) => {
-      const q = searchName(line.name);
-      const seen = new Set();
-      const options = [
-        ...rankByText(data.foods, q, mineText, 3), ...rankByText(BASIC_FOODS, q, (f) => f.name, 3), ...(await searchLocal(q, 3)),
-      ].filter((o) => !seen.has(savedKey(o)) && seen.add(savedKey(o))).slice(0, 6);
-      const qtyText = line.unit === 'g' || line.unit === 'ml' ? `${fmt(line.qty)} ${line.unit}` : `${fmt(line.qty, 2)} × ${UNITS[line.unit][0]}`;
-      return { text: `${qtyText}: ${line.name}`, line, options, pick: 0, grams: options[0] ? lineGrams(line, options[0]) ?? options[0].servingG ?? 100 : null };
-    }));
+    textLines = await matchLines(ev.target.text.value);
     drawLines();
   };
   document.getElementById('text-lines').onchange = (ev) => {
@@ -2314,7 +2333,7 @@ function viewFoodAdd(date, meal) {
     if (!sel) return;
     const x = textLines[Number(sel.dataset.line)];
     x.pick = Number(sel.value);
-    x.grams = lineGrams(x.line, x.options[x.pick]) ?? x.options[x.pick].servingG ?? x.grams;
+    x.grams = regram(x);
     drawLines();
   };
   document.getElementById('text-lines').oninput = (ev) => {
@@ -2438,6 +2457,7 @@ function viewEntry(date, entryId) {
     if (isNew) dayEntries(date).push({ id: uid('e'), meal: form.meal.value, foodId: food.id, grams: g });
     else Object.assign(entry, { grams: g, meal: form.meal.value });
     food.lastUsed = new Date().toISOString();
+    if (isNew) food.uses = (food.uses ?? 0) + 1;
     await save();
     location.hash = `#/diet/${date}`;
   };
@@ -2469,7 +2489,15 @@ function viewFood(idOrNew, date, meal) {
         ${input('c', 'Węglowodany (g)', food.per100.c)}
         ${input('servingG', 'Porcja (g, opcjonalnie)', food.servingG)}
       </div>
-      <p class="muted small" style="margin:0 4px 16px">Wartości przepisz z etykiety. Zmiana przelicza też wcześniejsze wpisy z tym produktem.</p>
+      <div class="section-title">Dodatkowo (opcjonalnie)</div>
+      <div class="list form">
+        ${input('fib', 'Błonnik (g)', food.per100.fib)}
+        ${input('sug', 'Cukry (g)', food.per100.sug)}
+        ${input('sat', 'Tł. nasycone (g)', food.per100.sat)}
+        ${input('salt', 'Sól (g)', food.per100.salt)}
+        ${input('pricePerKg', 'Cena za kg lub litr (zł)', food.pricePerKg)}
+      </div>
+      <p class="muted small" style="margin:0 4px 16px">Wartości przepisz z etykiety. Zmiana przelicza też wcześniejsze wpisy z tym produktem. Cena służy tylko do policzenia kosztu dnia.</p>
       <button class="btn" type="submit">${icon('check', 'icon-sm')} Zapisz</button>
     </form>
     ${!isNew && food.source === 'custom' ? offContributeBox(food) : ''}
@@ -2484,9 +2512,10 @@ function viewFood(idOrNew, date, meal) {
       return v === '' ? null : Number(v);
     };
     const per100 = { kcal: n('kcal'), p: n('p') ?? 0, f: n('f') ?? 0, c: n('c') ?? 0 };
+    for (const k of ['fib', 'sug', 'sat', 'salt']) if (n(k) != null) per100[k] = n(k);
     if (!(per100.kcal >= 0) || per100.kcal == null) { alert('Podaj kalorie na 100 g.'); return; }
     const code = String(f.get('code') ?? '').replace(/\D/g, '');
-    const values = { name: String(f.get('name')).trim(), brand: String(f.get('brand')).trim() || null, per100, servingG: n('servingG'), ...(code ? { code } : {}) };
+    const values = { name: String(f.get('name')).trim(), brand: String(f.get('brand')).trim() || null, per100, servingG: n('servingG'), pricePerKg: n('pricePerKg'), ...(code ? { code } : {}) };
     if (isNew) {
       const saved = saveFood({ source: 'custom', ...values });
       pendingBarcode = null;
@@ -2580,6 +2609,8 @@ function viewFoods() {
       <a class="row" href="#/food/${f.id}"><div class="grow"><div class="title">${esc(f.name)}</div>
         <div class="sub">${f.brand ? `${esc(f.brand)} · ` : ''}${fmt(f.per100.kcal)} kcal/100 g</div></div>
         <span class="chev">${icon('chevron-right', 'icon-sm')}</span></a>`).join('')}</div>` : ''}
+    <div class="section-title">Najwięcej białka za złotówkę</div>
+    ${proteinValueList()}
     <div class="section-title">Baza USDA</div>
     <div class="list form">
       <label class="row stacked"><span>Własny klucz API (opcjonalnie, zwiększa limit z 30 do 1000 wyszukiwań/h)</span>
@@ -2855,86 +2886,6 @@ function addCatalogExercise(exId, extra = {}) {
   exerciseById.set(exId, ex);
 }
 
-const MEAL_FILTERS = [['all', 'Wszystkie'], ...Object.entries(MEALS), ['vege', 'Wege'], ['quick', 'Do 10 min']];
-const recipeFilter = (r, f) => f === 'all' || (f === 'vege' ? isVege(r) : f === 'quick' ? r.minutes <= 10 : r.meals.includes(f));
-
-function viewRecipes(date, meal) {
-  let filter = meal && MEALS[meal] ? meal : 'all';
-  const draw = () => {
-    const list = RECIPES.filter((r) => recipeFilter(r, filter));
-    render('Przepisy', `
-      <div class="segmented">
-        ${MEAL_FILTERS.map(([k, l]) => `<a href="#" data-filter="${k}" class="${filter === k ? 'active' : ''}">${l}</a>`).join('')}
-      </div>
-      <div class="list">
-        ${list.map((r) => {
-          const t = recipeTotals(r);
-          const n = r.portions;
-          return `<a class="row" href="#/recipe/${r.id}${date ? `/${date}/${meal}` : ''}">
-            <div class="grow"><div class="title">${esc(r.name)}${isVege(r) ? ' <span class="badge">wege</span>' : ''}</div>
-            <div class="sub">${r.minutes} min · porcja: ${fmt(t.kcal / n)} kcal · B ${fmt(t.p / n)} · T ${fmt(t.f / n)} · W ${fmt(t.c / n)}</div></div>
-            <span class="chev">${icon('chevron-right', 'icon-sm')}</span></a>`;
-        }).join('')}
-      </div>
-      <p class="muted small" style="margin:12px 4px">Wartości odżywcze wyliczone z bazy USDA FoodData Central (domena publiczna) dla surowych składników.</p>
-    `, { back: date ? `#/food-add/${date}/${meal}` : '#/diet' });
-    view.onclick = onclick;
-  };
-  const onclick = (ev) => {
-    const f = ev.target.closest('[data-filter]');
-    if (!f) return;
-    ev.preventDefault();
-    filter = f.dataset.filter;
-    draw();
-  };
-  draw();
-}
-
-function viewRecipe(id, date, meal) {
-  const r = RECIPES.find((x) => x.id === id);
-  if (!r) return viewRecipes(date, meal);
-  const t = recipeTotals(r);
-  const n = r.portions;
-  const day = date ?? todayIso();
-  render(r.name, `
-    <div class="card">
-      <p>${r.minutes} min · ${n} ${n === 1 ? 'porcja' : n < 5 ? 'porcje' : 'porcji'}</p>
-      <h2>${fmt(t.kcal / n)} <span class="muted" style="font-size:15px;font-weight:500">kcal na porcję</span></h2>
-      <p class="small">Białko ${fmt(t.p / n)} g · Tłuszcze ${fmt(t.f / n)} g · Węglowodany ${fmt(t.c / n)} g</p>
-    </div>
-    <div class="section-title">Składniki (na ${n === 1 ? '1 porcję' : `${n} porcje`})</div>
-    <div class="list">
-      ${r.items.map(([ing, g]) => `<div class="row"><span class="grow">${esc(INGREDIENTS[ing].name)}</span><span class="sub">${g} g</span></div>`).join('')}
-    </div>
-    <div class="section-title">Przygotowanie</div>
-    <ol class="card steps">${r.steps.map((s) => `<li>${esc(s)}</li>`).join('')}</ol>
-    <div class="section-title">Dodaj do dziennika</div>
-    <form id="recipe-add">
-      <div class="list form">
-        <label class="row"><span class="grow">Posiłek</span><select name="meal">${Object.entries(MEALS).map(([k, v]) => `<option value="${k}" ${k === (meal ?? r.meals[0]) ? 'selected' : ''}>${v}</option>`).join('')}</select></label>
-        <label class="row"><span class="grow">Liczba porcji</span><input name="portions" inputmode="decimal" value="1"></label>
-      </div>
-      <button class="btn" type="submit">${icon('plus', 'icon-sm')} Dodaj (${day === todayIso() ? 'dziś' : dateLabel(day)})</button>
-    </form>
-    <details class="list" style="margin-top:16px">
-      <summary><span class="grow">Źródła wartości odżywczych</span><span class="chev">${icon('chevron-right', 'icon-sm')}</span></summary>
-      <ul class="explain">${r.items.map(([ing]) => `<li>${esc(INGREDIENTS[ing].name)}: ${esc(INGREDIENTS[ing].source)}</li>`).join('')}</ul>
-    </details>
-  `, { back: date ? `#/recipes/${date}/${meal}` : '#/recipes' });
-  document.getElementById('recipe-add').onsubmit = async (ev) => {
-    ev.preventDefault();
-    const f = ev.target;
-    const portions = Number(f.portions.value.replace(',', '.'));
-    if (!(portions > 0)) return;
-    const { per100, portionG } = recipePer100(r);
-    const food = saveFood({ source: 'recipe', code: r.id, name: r.name, brand: null, per100, servingG: portionG });
-    food.lastUsed = new Date().toISOString();
-    dayEntries(day).push({ id: uid('e'), meal: f.meal.value, foodId: food.id, grams: Math.round(portionG * portions) });
-    await save();
-    location.hash = `#/diet/${day}`;
-  };
-}
-
 // ---------- routing ----------
 
 const ROUTES = [
@@ -2956,6 +2907,13 @@ const ROUTES = [
   [/^#\/recipes\/(\d{4}-\d{2}-\d{2})\/(\w+)$/, viewRecipes, 'diet'],
   [/^#\/recipe\/([\w-]+)$/, (id) => viewRecipe(id), 'diet'],
   [/^#\/recipe\/([\w-]+)\/(\d{4}-\d{2}-\d{2})\/(\w+)$/, viewRecipe, 'diet'],
+  [/^#\/my-recipe\/([\w-]+)$/, viewRecipeEdit, 'diet'],
+  [/^#\/recipe-import\/([\w-]+)$/, viewRecipeImport, 'diet'],
+  [/^#\/mealplan$/, () => viewMealPlan(), 'diet'],
+  [/^#\/mealplan\/(\d{4}-\d{2}-\d{2})$/, viewMealPlan, 'diet'],
+  [/^#\/shopping\/(\d{4}-\d{2}-\d{2})$/, viewShopping, 'diet'],
+  [/^#\/photos$/, () => viewPhotos(), 'progress'],
+  [/^#\/photos\/(\w+)$/, viewPhotos, 'progress'],
   [/^#\/steps$/, viewSteps, 'today'],
   [/^#\/cardio$/, viewCardio, 'today'],
   [/^#\/calendar$/, () => viewCalendar(), 'progress'],

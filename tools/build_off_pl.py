@@ -4,7 +4,7 @@ Streams the full OFF export (tab-separated, gzip, ~1 GB) and keeps products sold
 Poland that have a name and energy per 100 g. Output is one JSON array per line, sorted
 by barcode so weekly rebuilds stay stable:
 
-    [code, name, brand, kcal, protein, fat, carbs, servingG, stores, scans]
+    [code, name, brand, kcal, protein, fat, carbs, servingG, stores, scans, fibre, sugars, satfat, salt]
 
 scans = how many people scanned it (popularity), used to rank search results.
 
@@ -65,7 +65,8 @@ def main(out_path, source=EXPORT_URL):
         kept.append((
             scans,
             [code, name[:120], brand[:60], kcal, num(r.get('proteins_100g')) or 0, num(r.get('fat_100g')) or 0,
-             num(r.get('carbohydrates_100g')) or 0, num(r.get('serving_quantity')), stores[:50], scans],
+             num(r.get('carbohydrates_100g')) or 0, num(r.get('serving_quantity')), stores[:50], scans,
+             num(r.get('fiber_100g')), num(r.get('sugars_100g')), num(r.get('saturated-fat_100g')), num(r.get('salt_100g'))],
         ))
     kept.sort(key=lambda x: -x[0])
     products = sorted((p for _, p in kept[:LIMIT]), key=lambda p: p[0])
