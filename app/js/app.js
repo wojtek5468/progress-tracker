@@ -23,6 +23,8 @@ import {
   microsCard, mealTargetLine, addWater, budgetFor, budgetLine, closerCard, onCloserClick, costLine, proteinValueList,
 } from './views-diet.js';
 import { waterGoalMl } from './diet-plus.js';
+import { viewCloud, viewReceive, viewReport, viewReportShared } from './views-platform.js';
+import { startAutoSync, setTempCloudUrl, cloudUrl } from './cloud.js';
 import {
   MEALS, view, titleEl, backBtn, data, exerciseById, NO_1RM_CATEGORIES, BLOCK_NAMES, esc, fmt, exInfo, exName, uid, sessionTitle, targets, isoWeekday, isTrainingDay, targetsFor, weightPoints, dailyIntake, adaptive, dateLabel, setData, render, currentWeek, sessionSummary, lastWithin, avg, todayIso, save, sessionKey, current1RM, previousSets, suggestedKg, defaultReps, ensureExercise, foodById, entryMacros, sumMacros, dayEntries, shiftDate, saveFood,
 } from './core.js';
@@ -40,7 +42,23 @@ function viewEmpty() {
       <p>Plan treningowy, dziennik posiłków i postępy. Bez konta i bez reklam; wszystko zostaje na tym telefonie.</p>
       <button class="btn" id="start-fresh">${icon('play', 'icon-sm')} Zacznij</button>
       <label class="btn secondary" style="margin-top:10px">${icon('upload', 'icon-sm')} Mam plik z danymi<input type="file" accept="application/json,.json" id="import"></label>
+      <button class="btn secondary" id="from-phone" style="margin-top:10px">${icon('qr-code', 'icon-sm')} Przenoszę z innego telefonu</button>
     </div>`);
+  document.getElementById('from-phone').onclick = async () => {
+    if (!cloudUrl()) {
+      const url = prompt('Adres serwera z ustawień starego telefonu (Ustawienia → Synchronizacja)')?.trim();
+      if (!url) return;
+      setTempCloudUrl(url);
+    }
+    let code = null;
+    try {
+      code = await scanBarcode({ qr: true });
+    } catch (err) {
+      alert(err.message);
+    }
+    code ??= prompt('Wklej link z drugiego telefonu')?.trim();
+    if (code) location.hash = `#/receive/${code.split('#/receive/').pop()}`;
+  };
   document.getElementById('start-fresh').onclick = () => { location.hash = '#/welcome'; };
   bindImport();
 }
@@ -831,6 +849,8 @@ function viewProgress() {
     ${plateauCard()}
     <a class="list row" href="#/calendar">${icon('calendar', 'icon-sm')}<div class="grow"><div class="title">Kalendarz treningów</div>
       <div class="sub">${streakLine() || 'Dni z treningami i seria tygodni'}</div></div><span class="chev">${icon('chevron-right', 'icon-sm')}</span></a>
+    <a class="list row" href="#/report">${icon('file-text', 'icon-sm')}<div class="grow"><div class="title">Raport dla trenera</div>
+      <div class="sub">Podsumowanie 4–12 tygodni: link albo PDF</div></div><span class="chev">${icon('chevron-right', 'icon-sm')}</span></a>
     <a class="list row" href="#/photos">${icon('camera', 'icon-sm')}<div class="grow"><div class="title">Zdjęcia sylwetki</div>
       <div class="sub">Porównanie przed i po, tylko na tym telefonie</div></div><span class="chev">${icon('chevron-right', 'icon-sm')}</span></a>
     ${muscleCard()}
@@ -880,6 +900,7 @@ async function viewSettings() {
     <div class="section-title">Dane</div>
     <div class="list">
       ${data ? `<a class="row" href="#/steps"><span class="grow">Kroki i Zdrowie (Skróty)</span><span class="chev">${icon('chevron-right', 'icon-sm')}</span></a>` : ''}
+      ${data ? `<a class="row" href="#/cloud"><span class="grow">Synchronizacja, nowy telefon, przypomnienia</span><span class="chev">${icon('chevron-right', 'icon-sm')}</span></a>` : ''}
       <label class="row">
 <span class="grow">Wczytaj plik danych</span>${icon('upload', 'icon-sm')}<input type="file" accept="application/json,.json" id="import"></label>
       ${data ? `<label class="row"><span class="grow">Importuj historię z Hevy lub Strong (CSV)</span>${icon('file-input', 'icon-sm')}<input type="file" accept=".csv,text/csv,text/comma-separated-values" id="import-csv"></label>` : ''}
@@ -2914,6 +2935,11 @@ const ROUTES = [
   [/^#\/shopping\/(\d{4}-\d{2}-\d{2})$/, viewShopping, 'diet'],
   [/^#\/photos$/, () => viewPhotos(), 'progress'],
   [/^#\/photos\/(\w+)$/, viewPhotos, 'progress'],
+  [/^#\/cloud$/, viewCloud, null],
+  [/^#\/receive\/([\w.-]+)$/, viewReceive, null],
+  [/^#\/report$/, () => viewReport(), 'progress'],
+  [/^#\/report\/(\d+)$/, viewReport, 'progress'],
+  [/^#\/report-view\/([\w-]+)$/, viewReportShared, null],
   [/^#\/steps$/, viewSteps, 'today'],
   [/^#\/cardio$/, viewCardio, 'today'],
   [/^#\/calendar$/, () => viewCalendar(), 'progress'],
@@ -2947,7 +2973,7 @@ function route() {
     // A shared plan opened before the first start waits until the profile is set up.
     const shared = hash.match(/^#\/plan\/([\w-]+)$/);
     if (shared) db.set('pendingPlan', shared[1]);
-    if (hash !== '#/settings') return viewEmpty();
+    if (hash !== '#/settings' && !/^#\/(receive|report-view)\//.test(hash)) return viewEmpty();
   }
   for (const [re, fn, tab] of ROUTES) {
     const m = hash.match(re);
@@ -2964,6 +2990,7 @@ async function start() {
   backBtn.innerHTML = icon('chevron-left');
   document.getElementById('settings-link').innerHTML = icon('settings');
   setData(await db.get('data'));
+  if (data) startAutoSync((r) => { if (r.status === 'pulled') route(); });
   window.addEventListener('hashchange', route);
   route();
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');

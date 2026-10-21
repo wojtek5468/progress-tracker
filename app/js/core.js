@@ -85,7 +85,12 @@ export function lastWithin(list, key, days) {
 
 export const avg = (xs) => xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null;
 export const todayIso = () => new Date().toLocaleDateString('sv-SE');
-export const save = () => db.set('data', data);
+// Called after every save (the optional sync listens here).
+export const afterSave = [];
+export async function save() {
+  await db.set('data', data);
+  for (const f of afterSave) f();
+}
 export const sessionKey = (programId, weekNumber, order) => `${programId}/${weekNumber}/${order}`;
 
 export function current1RM(exerciseId) {
