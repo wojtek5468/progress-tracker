@@ -3,10 +3,18 @@
 // Lowercase without Polish diacritics, so "zolty ser" finds "Żółty ser".
 export const fold = (s) => String(s ?? '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/ł/g, 'l');
 
-// Query words, folded. Longer Polish words lose their last letter, so "jajka" also
-// finds "jajko" and "pomidory" finds "pomidor" (a cheap stand-in for stemming).
+// Common Polish endings (folded), longest first. Cutting them off is a cheap stand-in for
+// stemming: "jajka" finds "jajko", "chleba" finds "chleb", "orzechowego" finds "orzechowe".
+const ENDINGS = ['ego', 'owi', 'ach', 'ami', 'ow', 'ej', 'ie', 'ym', 'em', 'om', 'a', 'e', 'i', 'o', 'u', 'y'];
+export function stem(word) {
+  if (word.length < 4 || /\d/.test(word)) return word;
+  const end = ENDINGS.find((e) => word.endsWith(e) && word.length - e.length >= (e.length > 1 ? 4 : 3));
+  return end ? word.slice(0, -end.length) : word;
+}
+
+// Query words, folded and stemmed.
 export function queryWords(query) {
-  return fold(query).split(/[\s,]+/).filter(Boolean).map((w) => (w.length >= 5 ? w.slice(0, -1) : w));
+  return fold(query).split(/[\s,]+/).filter(Boolean).map(stem);
 }
 
 // 0 when some word is missing; otherwise higher for words that start a word in the text

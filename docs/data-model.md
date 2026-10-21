@@ -15,7 +15,7 @@ Pola puste są pomijane. Jednostki: kg, cm, sekundy, minuty snu, daty ISO `YYYY-
 | `exercises[]` | `{id, name, uses}`; `id` to slug, nazwy głównych bojów ujednolicone (np. Back SQ/Back squad → Back squat) | wszystkie tygodnie |
 | `oneRepMaxes[]` | `{exerciseId, date, weightKg, reps, estimated1RM, source}` | MAX |
 | `programs[]` | `{id, name, weeks[]}`; tydzień: `{id, number, label, sourceSheet, sessions[]}` | arkusze tygodni |
-| sesja | `{order, blocks[{type: warmup/main/cooldown, items[]}]}` | |
+| sesja | `{order, blocks[{type: warmup/main/cooldown, items[]}]}`; kolejne pozycje z tym samym `group` to superseria | |
 | pozycja planu | `exerciseId, percent1RM (0–1), rir, plannedKg, actualKg, loadText, reps, repsText, sets, tempo, restSec, notes, importFlags` | |
 | `dailyLogs[]` | `{date, steps, sleepMin, restingHr, activeKcal, training, kcal}` | Pomiary, Zdrowie |
 | `bodyMeasurements[]` | `{date, weightKg, bodyFatPct, leanMassKg}` | Zdrowie |
@@ -73,3 +73,6 @@ Plik z nowszej wersji jest odrzucany, żeby stara kopia aplikacji nie zgubiła p
 `tools/import_xlsx.py` nadal tworzy wersję 1; aplikacja sama ją zaktualizuje.
 
 - 1 → 2: jedno wyszukiwanie produktów (usunięte `settings.foodTab`), nowe opcjonalne pola `warmup` w seriach i `favorite` w produktach.
+
+Pola dodane w wersji 2 bez migracji (opcjonalne): `profile.goalWeightKg`, `profile.goalDate`, `profile.carbCycling`, `profile.trainingDays[]` (1 = poniedziałek),
+`settings.lastReviewDate`, `settings.autoProgression`, `settings.restSound`, `settings.barKg`, `settings.plates[]`, `workoutLogs[].importKey` (trening z Hevy/Strong), pozycja planu `group` (superseria).

@@ -20,7 +20,7 @@ Skaner kodów kreskowych: [ZXing](https://github.com/zxing-js/library) 0.21.3 (l
 
 ## Testy
 
-Obliczenia (1RM, talerze, rozgrzewka, makro, trend wagi, wyszukiwanie, migracje danych) mają testy w `tests/`:
+Obliczenia (1RM, talerze, rozgrzewka, progresja, makro, cel z terminem, trend wagi, wyszukiwanie, miary domowe, import z Hevy/Strong, plany w linku, migracje danych) mają testy w `tests/`:
 
 ```sh
 npm test

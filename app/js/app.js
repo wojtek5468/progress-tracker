@@ -11,6 +11,8 @@ import { estimate1RM, round25, platesPerSide, warmupSets, isBarbell, progression
 import { rankByText } from './search.js';
 import { SCHEMA_VERSION, migrate, checkImport } from './migrate.js';
 import { parseHealthText } from './health-text.js';
+import { workoutsFromCsv, EXERCISE_MAP, sharedPlan, encodePlan, decodePlan } from './importers.js';
+import { parseMealText, lineGrams, unitGrams, searchName, UNITS } from './measures.js';
 
 const MEALS = { breakfast: 'Śniadanie', lunch: 'Obiad', dinner: 'Kolacja', snack: 'Przekąski' };
 
@@ -142,22 +144,162 @@ function ensureExercise(name) {
 function viewEmpty() {
   render('Progress', `
     <div class="empty">
-      ${icon('upload')}
-      <h2>Wczytaj swoje dane</h2>
-      <p>Wybierz plik <b>seed.json</b>. Dane zostają tylko na tym telefonie.</p>
-      <label class="btn">${icon('upload', 'icon-sm')} Wybierz plik<input type="file" accept="application/json,.json" id="import"></label>
-      <button class="btn secondary" id="start-fresh" style="margin-top:10px">Zacznij od zera</button>
+      ${icon('dumbbell')}
+      <h2>Trening i dieta w jednym</h2>
+      <p>Plan treningowy, dziennik posiłków i postępy. Bez konta i bez reklam; wszystko zostaje na tym telefonie.</p>
+      <button class="btn" id="start-fresh">${icon('play', 'icon-sm')} Zacznij</button>
+      <label class="btn secondary" style="margin-top:10px">${icon('upload', 'icon-sm')} Mam plik z danymi<input type="file" accept="application/json,.json" id="import"></label>
     </div>`);
-  document.getElementById('start-fresh').onclick = async () => {
-    const blank = { schemaVersion: SCHEMA_VERSION, programs: [], exercises: [], profile: {}, dailyLogs: [], bodyMeasurements: [], settings: {} };
-    await db.set('data', blank);
-    await db.persist();
-    setData(blank);
-    location.hash = '#/profile';
-    route();
-  };
-
+  document.getElementById('start-fresh').onclick = () => { location.hash = '#/welcome'; };
   bindImport();
+}
+
+// Picks the ready-made plan closest to the answers: same place, audience, days per week and level.
+function pickTemplate({ place, days, sex, level }) {
+  const audience = sex === 'female' ? 'women' : 'men';
+  const fits = (t) => (level === 'beginner' ? /Początkujący|Każdy/.test(t.level) : /Średnio|średni|Każdy/.test(t.level));
+  return TEMPLATES.filter((t) => t.place === place && !t.source && forAudience(t, audience))
+    .map((t) => ({ t, score: Math.abs(t.perWeek - days) * 2 + (fits(t) ? 0 : 1) + (t.audience === audience ? 0 : 0.5) }))
+    .sort((a, b) => a.score - b.score)[0]?.t ?? null;
+}
+
+// First start for a new person: body data and three questions, then a plan and macro targets.
+function viewWelcome() {
+  const opt = (name, value, label, checked) => `<label><input type="radio" name="${name}" value="${value}" ${checked ? 'checked' : ''}><span>${label}</span></label>`;
+  render('Witaj', `
+    <form id="welcome-form">
+      <div class="section-title">O Tobie</div>
+      <div class="list form">
+        <label class="row"><span class="grow">Płeć</span><select name="sex"><option value="female">Kobieta</option><option value="male">Mężczyzna</option></select></label>
+        <label class="row"><span class="grow">Data urodzenia</span><input name="birthDate" type="date" required></label>
+        <label class="row"><span class="grow">Wzrost (cm)</span><input name="heightCm" inputmode="decimal" required></label>
+        <label class="row"><span class="grow">Waga (kg)</span><input name="weightKg" inputmode="decimal" required></label>
+      </div>
+      <div class="section-title">1. Jaki masz cel?</div>
+      <div class="choice">${opt('goal', 'reduction', 'Schudnąć', true)}${opt('goal', 'maintenance', 'Utrzymać wagę i nabrać formy')}${opt('goal', 'gain', 'Zbudować mięśnie')}</div>
+      <div class="section-title">2. Ile razy w tygodniu możesz trenować?</div>
+      <div class="choice row4">${[2, 3, 4, 5].map((n) => opt('days', n, `${n}×`, n === 3)).join('')}</div>
+      <div class="section-title">3. Gdzie i jak długo już trenujesz?</div>
+      <div class="choice">${opt('place', 'gym', 'Siłownia', true)}${opt('place', 'home', 'W domu')}${opt('place', 'cardio', 'Bieganie i mobilność')}</div>
+      <div class="choice" style="margin-top:8px">${opt('level', 'beginner', 'Zaczynam albo wracam', true)}${opt('level', 'intermediate', 'Trenuję regularnie od roku+')}</div>
+      <button class="btn" type="submit" style="margin-top:20px">${icon('check', 'icon-sm')} Ułóż mój start</button>
+      <p class="muted small" style="margin:12px 4px">Dane służą tylko do wyliczenia kalorii i zostają na tym telefonie. Wszystko zmienisz później w Ustawieniach.</p>
+    </form>
+  `, { back: '#/today' });
+  document.getElementById('welcome-form').onsubmit = async (ev) => {
+    ev.preventDefault();
+    const f = new FormData(ev.target);
+    const n = (k) => Number(String(f.get(k)).replace(',', '.'));
+    const profile = {
+      sex: f.get('sex'), birthDate: f.get('birthDate'), heightCm: n('heightCm'), weightKg: n('weightKg'),
+      goal: f.get('goal'), activitySource: 'manual', activityLevel: n('days') >= 4 ? 'moderate' : 'light',
+    };
+    if (!(profile.heightCm > 100 && profile.heightCm < 250) || !(profile.weightKg > 30 && profile.weightKg < 300)) {
+      alert('Sprawdź wzrost i wagę.');
+      return;
+    }
+    profile.birthYear = Number(profile.birthDate.slice(0, 4));
+    const fresh = { schemaVersion: SCHEMA_VERSION, programs: [], exercises: [], profile, dailyLogs: [], bodyMeasurements: [{ date: todayIso(), weightKg: profile.weightKg }], settings: {} };
+    setData(fresh);
+    const pending = await db.get('pendingPlan');
+    const t = pending ? null : pickTemplate({ place: f.get('place'), days: n('days'), sex: profile.sex, level: f.get('level') });
+    if (t) {
+      addTemplateProgram(t);
+      profile.trainingDays = defaultTrainingDays(t.perWeek);
+    }
+    await save();
+    await db.persist();
+    if (pending) {
+      await db.del('pendingPlan');
+      location.hash = `#/plan/${pending}`;
+      return;
+    }
+    location.hash = '#/start';
+  };
+}
+
+// Summary after the first start: the plan and the daily targets.
+function viewStart() {
+  const cw = currentWeek();
+  const t = targets();
+  render('Twój start', `
+    ${cw ? `<div class="card hero"><p>Twój plan</p><h2>${esc(cw.program.name)}</h2>
+      <p class="small">${cw.program.weeks.length} tyg. · ${cw.week.sessions.length}× w tygodniu</p>
+      <a class="btn" href="#/plans/${cw.program.id}">Zobacz plan</a></div>` : ''}
+    ${t ? `<div class="card"><p>Cel dzienny · ${GOALS[t.goal]}</p><h2>${fmt(t.kcal)} kcal</h2>
+      <p class="small">Białko ${fmt(t.protein)} g · Tłuszcze ${fmt(t.fat)} g · Węglowodany ${fmt(t.carbs)} g</p></div>` : ''}
+    <div class="list">
+      <a class="row" href="#/templates">${icon('calendar-days', 'icon-sm')}<span class="grow">Wolę wybrać inny plan</span><span class="chev">${icon('chevron-right', 'icon-sm')}</span></a>
+      <a class="row" href="#/settings">${icon('upload', 'icon-sm')}<span class="grow">Mam historię w Hevy lub Strong</span><span class="chev">${icon('chevron-right', 'icon-sm')}</span></a>
+    </div>
+    <a class="btn" href="#/today">Do dzieła</a>
+  `);
+}
+
+// ---------- plans shared by link ----------
+
+async function sharePlan(program, withKg) {
+  const code = await encodePlan(sharedPlan(program, (id) => exInfo(id), { withKg }));
+  const url = `${location.origin}${location.pathname}#/plan/${code}`;
+  const text = `Plan „${program.name}” z aplikacji Progress`;
+  if (navigator.share) {
+    try {
+      await navigator.share({ title: program.name, text, url });
+      return;
+    } catch (err) {
+      if (err.name === 'AbortError') return;
+    }
+  }
+  try {
+    await navigator.clipboard.writeText(url);
+    alert('Link do planu skopiowany. Wklej go znajomemu w wiadomości.');
+  } catch {
+    prompt('Skopiuj link do planu:', url);
+  }
+}
+
+async function viewPlanImport(code) {
+  let plan;
+  try {
+    plan = await decodePlan(code);
+  } catch {
+    return render('Plan', '<p class="error-box">Ten link do planu jest niepełny albo uszkodzony. Poproś o nowy.</p>', { back: '#/plans' });
+  }
+  const name = (id) => exerciseById.has(id) || CATALOG[id] ? exName(id) : plan.exercises?.[id]?.name ?? id;
+  const first = plan.weeks[0];
+  render('Plan od znajomego', `
+    <div class="card"><p>${plan.weeks.length} ${plan.weeks.length === 1 ? 'tydzień' : plan.weeks.length < 5 ? 'tygodnie' : 'tygodni'} · ${first?.sessions.length ?? 0}× w tygodniu</p>
+      <h2>${esc(plan.name)}</h2></div>
+    ${(first?.sessions ?? []).map((sess) => `
+      <div class="section-title">${esc(sess.name || `Trening ${sess.order}`)}${plan.weeks.length > 1 ? ' · tydzień 1' : ''}</div>
+      <div class="list">${sess.blocks.filter((b) => b.type === 'main').flatMap((b) => b.items).map((it) => `
+        <div class="row"><div class="grow"><div class="title">${esc(name(it.exerciseId))}</div>
+        <div class="sub">${[it.percent1RM ? `${Math.round(it.percent1RM * 100)}% 1RM` : '', it.rir != null ? `RIR ${it.rir}` : '', it.plannedKg ? `${fmt(it.plannedKg, 2)} kg` : ''].filter(Boolean).join(' · ')}</div></div>
+        <b class="nowrap">${it.sets ?? 1} × ${esc(it.reps ?? it.repsText ?? '')}</b></div>`).join('')}</div>`).join('')}
+    <button class="btn" id="add-plan">${icon('plus', 'icon-sm')} Dodaj do moich planów</button>
+    <p class="muted small" style="margin:12px 4px">Plan przyszedł w samym linku; nikt poza Tobą i nadawcą go nie widzi. ${plan.weeks.some((w) => w.sessions.some((x) => x.blocks.some((b) => b.items.some((i) => i.percent1RM)))) ? 'Kilogramy z %1RM policzą się z Twoich rekordów.' : ''}</p>
+  `, { back: '#/plans' });
+  document.getElementById('add-plan').onclick = async () => {
+    for (const [id, info] of Object.entries(plan.exercises ?? {})) {
+      addCatalogExercise(id, { name: info.name, customName: info.name, description: info.desc || undefined, cat: info.cat });
+    }
+    const id = uid('plan');
+    const program = {
+      id, name: plan.name, sharedAt: todayIso(),
+      weeks: plan.weeks.map((w) => ({
+        id: `${id}-w${w.number}`, number: w.number, label: w.label ?? null,
+        sessions: w.sessions.map((sess) => {
+          let order = 0;
+          return { order: sess.order, name: sess.name, blocks: sess.blocks.map((b) => ({ type: b.type, items: b.items.map((it) => ({ ...it, order: ++order })) })) };
+        }),
+      })),
+    };
+    data.programs.push(program);
+    data.settings.currentProgram = program.id;
+    data.settings.currentWeek = program.weeks[0]?.number ?? 1;
+    await save();
+    location.hash = `#/plans/${program.id}`;
+  };
 }
 
 // Meal that fits the time of day, for the "add a meal" shortcut.
@@ -309,6 +451,14 @@ function viewProgram(programId) {
     </div>` : '<p class="muted small" style="margin:0 4px 12px">Ten plan nie ma jeszcze tygodni.</p>'}
     <button class="btn" id="add-week">${icon('plus', 'icon-sm')} Dodaj tydzień</button>
     ${!isCurrent && selected.weeks.length ? `<button class="btn secondary" id="make-current" style="margin-top:12px">${icon('play', 'icon-sm')} Realizuj ten plan</button>` : ''}
+    <details class="list" style="margin-top:12px">
+      <summary>${icon('share-2', 'icon-sm')}<span class="grow">Udostępnij plan znajomemu</span><span class="chev">${icon('chevron-right', 'icon-sm')}</span></summary>
+      <div class="form">
+        <label class="row"><span class="grow small">Dołącz zaplanowane kilogramy (bez nich ciężar policzy się z %1RM znajomego)</span><input type="checkbox" id="share-kg" style="width:auto"></label>
+        <div class="row"><button type="button" class="btn" id="share-plan">${icon('share-2', 'icon-sm')} Wyślij link</button></div>
+        <p class="small muted" style="margin:0 16px 12px">Plan jedzie w samym linku, bez serwera. Twoja historia treningów i wyniki nie są w nim zapisane.</p>
+      </div>
+    </details>
     <div class="actions">
       <button type="button" class="btn secondary" id="rename-program">Zmień nazwę</button>
       <button type="button" class="btn danger" id="delete-program">${icon('trash-2', 'icon-sm')} Usuń plan</button>
@@ -326,6 +476,7 @@ function viewProgram(programId) {
     await save();
     route();
   });
+  document.getElementById('share-plan').onclick = () => sharePlan(selected, document.getElementById('share-kg').checked).catch((err) => alert(`Nie udało się przygotować linku: ${err.message}`));
   document.getElementById('rename-program').onclick = async () => {
     const name = prompt('Nowa nazwa planu', selected.name)?.trim();
     if (!name) return;
@@ -405,6 +556,36 @@ function viewWeek(programId, number) {
   };
 }
 
+// Superset letters (A, B, …) for consecutive items that share a `group`; null for single exercises.
+function supersetLabels(items) {
+  const labels = [];
+  let letter = 64;
+  items.forEach((it, i) => {
+    const prev = items[i - 1];
+    if (!it.group) labels.push(null);
+    else if (prev?.group === it.group) labels.push(labels[i - 1]);
+    else labels.push(String.fromCharCode(++letter));
+  });
+  return labels;
+}
+
+// Links item i with the one before it into a superset, or unlinks it.
+function toggleSuperset(items, i) {
+  const it = items[i];
+  const prev = items[i - 1];
+  if (!prev) return;
+  if (it.group && it.group === prev.group) {
+    delete it.group;
+    // A group needs at least two exercises.
+    for (const x of [prev, items[i + 1]]) {
+      if (x?.group && !items.some((y) => y !== x && y.group === x.group)) delete x.group;
+    }
+  } else {
+    prev.group ??= uid('ss');
+    it.group = prev.group;
+  }
+}
+
 function itemChips(it) {
   const chips = [];
   const load = suggestedKg(it);
@@ -429,10 +610,11 @@ function viewSession(programId, number, order) {
     ${blocks.length ? blocks.map((b) => `
       <div class="section-title">${BLOCK_NAMES[b.type] ?? b.type}</div>
       <div class="list">
-        ${b.items.map((it) => {
+        ${b.items.map((it, i, all) => {
           const info = exInfo(it.exerciseId);
-          return `<a class="ex ex-link" href="#/exercise/${encodeURIComponent(it.exerciseId)}">
-            <div class="name">${esc(info.name)}</div>
+          const ss = supersetLabels(all)[i];
+          return `<a class="ex ex-link ${ss ? 'superset' : ''}" href="#/exercise/${encodeURIComponent(it.exerciseId)}">
+            <div class="name">${ss ? `<span class="ss">${ss}</span> ` : ''}${esc(info.name)}</div>
             ${info.desc ? `<div class="desc">${esc(info.desc)}</div>` : ''}
             ${itemChips(it) ? `<div class="meta">${itemChips(it)}</div>` : ''}
             ${it.notes ? `<div class="note">${esc(it.notes)}</div>` : ''}
@@ -772,12 +954,35 @@ async function viewSettings() {
       ${data ? `<a class="row" href="#/steps"><span class="grow">Kroki i Zdrowie (Skróty)</span><span class="chev">${icon('chevron-right', 'icon-sm')}</span></a>` : ''}
       <label class="row">
 <span class="grow">Wczytaj plik danych</span>${icon('upload', 'icon-sm')}<input type="file" accept="application/json,.json" id="import"></label>
+      ${data ? `<label class="row"><span class="grow">Importuj historię z Hevy lub Strong (CSV)</span>${icon('file-input', 'icon-sm')}<input type="file" accept=".csv,text/csv,text/comma-separated-values" id="import-csv"></label>` : ''}
       ${data ? `<a class="row" id="export" href="#"><span class="grow">Zapisz kopię zapasową</span><span class="sub">${last ? `ostatnio ${dateLabel(last)}` : 'jeszcze nie'}</span>${icon('download', 'icon-sm')}</a>` : ''}
     </div>
     ${data ? `<button class="btn danger" id="reset">${icon('trash-2', 'icon-sm')} Usuń dane z telefonu</button>` : ''}
     <p class="muted small" style="text-align:center;margin-top:24px">Ikony: Lucide (licencja ISC).<br>Dane są przechowywane wyłącznie na tym urządzeniu.</p>
   `, { back: '#/today' });
   bindImport();
+  document.getElementById('import-csv')?.addEventListener('change', async (e) => {
+    const file = e.target.files[0];
+    e.target.value = '';
+    if (!file) return;
+    try {
+      const text = await file.text();
+      let workouts = workoutsFromCsv(text);
+      if (workouts[0]?.key.startsWith('strong:') && !confirm('Strong nie zapisuje jednostki. Czy ciężary w tym pliku są w kilogramach?\n\nOK = kilogramy, Anuluj = funty (lb)')) {
+        workouts = workoutsFromCsv(text, { unit: 'lb' });
+      }
+      const fresh = workouts.filter((w) => !data.workoutLogs.some((l) => l.importKey === w.key));
+      if (!fresh.length) return alert('Wszystkie treningi z tego pliku są już w aplikacji.');
+      const names = new Set(fresh.flatMap((w) => w.entries.map((x) => x.name)));
+      if (!confirm(`Znaleziono ${fresh.length} treningów (${dateLabel(fresh[0].date)} – ${dateLabel(fresh.at(-1).date)}), ${names.size} ćwiczeń. Zaimportować?`)) return;
+      const records = importWorkouts(fresh);
+      await save();
+      alert(`Zaimportowano ${fresh.length} treningów.${records ? ` Rekordy 1RM: ${records}.` : ''} Ćwiczenia bez polskiego odpowiednika mają nazwy z pliku; możesz je zmienić w Ustawienia → Ćwiczenia.`);
+      route();
+    } catch (err) {
+      alert(`Nie udało się zaimportować: ${err.message}`);
+    }
+  });
   document.getElementById('export')?.addEventListener('click', async (e) => {
     e.preventDefault();
     try {
@@ -921,6 +1126,47 @@ function viewReview() {
     await save();
     location.hash = '#/today';
   };
+}
+
+// ---------- history from other apps ----------
+
+// Adds workouts parsed by importers.js; common lifts map to the catalog, the rest become
+// the user's own exercises under their original names. Returns the number of new 1RM records.
+function importWorkouts(workouts) {
+  const app = (key) => (key.startsWith('hevy:') ? 'Hevy' : 'Strong');
+  for (const w of workouts) {
+    const entries = w.entries.map((x) => {
+      const mapped = EXERCISE_MAP[x.name.toLowerCase()];
+      if (mapped) addCatalogExercise(mapped);
+      return { exerciseId: mapped ?? ensureExercise(x.name), sets: x.sets };
+    });
+    data.workoutLogs.push({
+      id: uid('imp'), date: w.date, sessionKey: 'import', importKey: w.key, title: `${w.title} (${app(w.key)})`,
+      durationMin: w.durationMin, entries, records: [],
+      volumeKg: Math.round(entries.flatMap((e) => e.sets).filter((x) => !x.warmup).reduce((v, x) => v + (x.kg ?? 0) * (x.reps ?? 0), 0)),
+    });
+  }
+  data.workoutLogs.sort((a, b) => a.date.localeCompare(b.date));
+  // Best estimated 1RM per exercise from the imported sets, when it beats what the app knows.
+  let records = 0;
+  const best = new Map();
+  for (const w of data.workoutLogs.filter((l) => workouts.some((x) => x.key === l.importKey))) {
+    for (const en of w.entries) {
+      if (NO_1RM_CATEGORIES.has(exInfo(en.exerciseId).cat)) continue;
+      for (const x of en.sets) {
+        if (x.warmup || !(x.kg > 0 && x.reps > 0 && x.reps <= 10)) continue;
+        const e1rm = estimate1RM(x.kg, x.reps);
+        if (e1rm > (best.get(en.exerciseId)?.e1rm ?? 0)) best.set(en.exerciseId, { e1rm, date: w.date, kg: x.kg, reps: x.reps });
+      }
+    }
+  }
+  for (const [exerciseId, b] of best) {
+    const known = current1RM(exerciseId);
+    if (known && known >= b.e1rm) continue;
+    data.oneRepMaxes.push({ exerciseId, date: b.date, weightKg: b.kg, reps: b.reps, estimated1RM: Math.round(b.e1rm * 10) / 10, source: 'import' });
+    records++;
+  }
+  return records;
 }
 
 // ---------- backup ----------
@@ -1099,6 +1345,7 @@ function newDraft(program, week, session) {
         exerciseId: it.exerciseId,
         restSec: it.restSec ?? 90,
         plan: itemChips(it),
+        ...(it.group ? { group: it.group } : {}),
         ...(hint ? { hint: hint.reason } : {}),
         sets: Array.from({ length: it.sets ?? 1 }, (_, i) => ({
           kg: planned ?? hint?.kg ?? (prev[i] ?? prev.at(-1))?.kg ?? null, reps: defaultReps(it), done: false,
@@ -1201,10 +1448,12 @@ function drawLog(draft, back) {
       <p class="muted small" style="margin:0 4px 12px">${esc(draft.title)}</p>
       ${draft.entries.map((en, e) => {
         const prev = prevOf(en);
+        const ss = supersetLabels(draft.entries)[e];
         return `
-        <div class="card log-card">
+        ${ss && ss !== supersetLabels(draft.entries)[e - 1] ? `<div class="section-title ss-title">Superseria ${ss}: na zmianę, przerwa po ostatnim ćwiczeniu</div>` : ''}
+        <div class="card log-card ${ss ? 'superset' : ''}">
           <div class="log-head">
-            <div class="name">${esc(exName(en.exerciseId))}</div>
+            <div class="name">${ss ? `<span class="ss">${ss}</span> ` : ''}${esc(exName(en.exerciseId))}</div>
             <button type="button" class="link-btn" data-swap="${e}">Zamień</button>
             <button type="button" class="icon-btn" data-remove="${e}" aria-label="Usuń ćwiczenie z treningu">${icon('trash-2', 'icon-sm')}</button>
           </div>
@@ -1219,6 +1468,7 @@ function drawLog(draft, back) {
             ${canWarmUp(en) ? `<button type="button" class="link-btn" data-warmup="${e}">Rozgrzewka</button>` : ''}
             ${barbell(en) ? `<button type="button" class="link-btn" data-plates="${e}">${en.showPlates ? 'Ukryj talerze' : 'Talerze'}</button>` : ''}
             ${en.note == null ? `<button type="button" class="link-btn" data-note-open="${e}">Notatka</button>` : ''}
+            ${e > 0 ? `<button type="button" class="link-btn" data-link="${e}">${en.group && en.group === draft.entries[e - 1].group ? 'Rozłącz superserię' : 'Superseria'}</button>` : ''}
           </div>
           ${en.note != null ? `<textarea class="note" data-note="${e}" rows="2" placeholder="Np. ból barku, za lekko, zmiana chwytu">${esc(en.note)}</textarea>` : ''}
         </div>`;
@@ -1256,6 +1506,12 @@ function drawLog(draft, back) {
       const remove = ev.target.closest('[data-remove]');
       const noteOpen = ev.target.closest('[data-note-open]');
       const warm = ev.target.closest('[data-warmup]');
+      const link = ev.target.closest('[data-link]');
+      if (link) {
+        toggleSuperset(draft.entries, Number(link.dataset.link));
+        await persist();
+        return draw();
+      }
       const plates = ev.target.closest('[data-plates]');
       if (warm) {
         const en = draft.entries[Number(warm.dataset.warmup)];
@@ -1278,7 +1534,11 @@ function drawLog(draft, back) {
         const set = draft.entries[e].sets[i];
         set.done = !set.done;
         done.closest('.set-row').classList.toggle('done', set.done);
-        if (set.done) startRest(set.warmup ? Math.min(60, draft.entries[e].restSec) : draft.entries[e].restSec);
+        const en = draft.entries[e];
+        // In a superset the rest comes after the last exercise of the group.
+        const nextInGroup = en.group && draft.entries[e + 1]?.group === en.group;
+        if (set.done && nextInGroup && !set.warmup) stopRest();
+        else if (set.done) startRest(set.warmup ? Math.min(60, en.restSec) : en.restSec);
         persist();
       } else if (add) {
         const e = Number(add.dataset.add);
@@ -1430,8 +1690,9 @@ function viewEdit(programId, number, order) {
     <label class="field"><span>${label}</span><input type="text" inputmode="${mode}" data-b="${b}" data-i="${i}" data-f="${f}" value="${esc(value ?? '')}"></label>`;
   const rows = (b) => draft[b].items.map((it, i) => `
     <div class="ex edit-row">
-      <div class="edit-head"><span class="name">${esc(exName(it.exerciseId))}</span>
+      <div class="edit-head"><span class="name">${supersetLabels(draft[b].items)[i] ? `<span class="ss">${supersetLabels(draft[b].items)[i]}</span> ` : ''}${esc(exName(it.exerciseId))}</span>
         <span class="edit-tools">
+          ${i > 0 && draft[b].type === 'main' ? `<button type="button" class="icon-btn ${it.group && it.group === draft[b].items[i - 1].group ? 'on' : ''}" data-link="${b}/${i}" aria-label="Superseria z poprzednim ćwiczeniem">${icon('link-2', 'icon-sm')}</button>` : ''}
           <button type="button" class="icon-btn" data-up="${b}/${i}" aria-label="W górę" ${i === 0 ? 'disabled' : ''}>${icon('chevron-left', 'icon-sm rot90')}</button>
           <button type="button" class="icon-btn" data-del="${b}/${i}" aria-label="Usuń ćwiczenie">${icon('trash-2', 'icon-sm')}</button>
         </span></div>
@@ -1459,7 +1720,7 @@ function viewEdit(programId, number, order) {
     <p class="muted small" style="margin:0 4px 12px">${esc(program.name)} · tydzień ${week.number} · ${esc(sessionTitle(session))}</p>
     <datalist id="ex-names">${data.exercises.map((e) => `<option value="${esc(exName(e.id))}">`).join('')}</datalist>
     <div id="blocks">${draft.map((_, b) => blockHtml(b)).join('')}</div>
-    <p class="muted small" style="margin:0 4px 16px">Gdy podasz % 1RM, kilogramy liczą się z Twojego aktualnego rekordu. Nowe ćwiczenie możesz opisać w Ustawienia → Ćwiczenia.</p>
+    <p class="muted small" style="margin:0 4px 16px">Gdy podasz % 1RM, kilogramy liczą się z Twojego aktualnego rekordu. Przycisk z ogniwem łączy ćwiczenie z poprzednim w superserię: robisz je na zmianę, a przerwa jest dopiero po ostatnim. Nowe ćwiczenie możesz opisać w Ustawienia → Ćwiczenia.</p>
     <button class="btn" id="save-plan">${icon('check', 'icon-sm')} Zapisz</button>
   `, { back: `#/session/${key}` });
 
@@ -1488,7 +1749,12 @@ function viewEdit(programId, number, order) {
     const del = ev.target.closest('[data-del]');
     const up = ev.target.closest('[data-up]');
     const add = ev.target.closest('[data-add]');
-    if (del) {
+    const link = ev.target.closest('[data-link]');
+    if (link) {
+      const [b, i] = link.dataset.link.split('/').map(Number);
+      toggleSuperset(draft[b].items, i);
+      redraw();
+    } else if (del) {
       const [b, i] = del.dataset.del.split('/').map(Number);
       draft[b].items.splice(i, 1);
       redraw();
@@ -1986,6 +2252,15 @@ function viewFoodAdd(date, meal) {
       <button type="button" class="icon-btn" id="scan" aria-label="Skanuj kod kreskowy">${icon('scan-barcode')}</button>
     </form>
     <div id="food-results"></div>
+    <details class="list" id="text-box">
+      <summary><span class="grow">Wpisz posiłek tekstem</span><span class="chev">${icon('chevron-right', 'icon-sm')}</span></summary>
+      <form id="text-form" class="form">
+        <label class="row stacked"><span>Np. „2 jajka, kromka chleba żytniego, łyżka masła, pół banana”</span>
+          <textarea name="text" rows="2" placeholder="Co zjadłeś?"></textarea></label>
+        <div class="row"><button class="btn secondary" type="submit">Rozpoznaj</button></div>
+      </form>
+      <div id="text-lines"></div>
+    </details>
     <details class="list" id="quick-box">
       <summary><span class="grow">Szybki wpis (same kalorie)</span><span class="chev">${icon('chevron-right', 'icon-sm')}</span></summary>
       <form id="quick-form" class="form">
@@ -2030,6 +2305,62 @@ function viewFoodAdd(date, meal) {
     drawResults();
   };
   document.getElementById('custom-food').onclick = () => { pendingBarcode = state.pendingCode ?? null; };
+  // Text entry: every line gets the best matches from my products, basic foods and the shop list.
+  let textLines = [];
+  const lineKcal = (x) => (x.options[x.pick] && x.grams ? `${fmt(x.options[x.pick].per100.kcal * x.grams / 100)} kcal` : '');
+  const drawLines = () => {
+    const ok = textLines.filter((x) => x.options.length);
+    document.getElementById('text-lines').innerHTML = textLines.length ? `<div class="text-lines">${textLines.map((x, i) => `
+      <div class="row stacked">
+        <span>${esc(x.text)}</span>
+        ${x.options.length ? `<div class="line-pick">
+          <select data-line="${i}">${x.options.map((o, j) => `<option value="${j}" ${j === x.pick ? 'selected' : ''}>${esc(o.name)}${o.brand ? ` (${esc(o.brand)})` : ''}</option>`).join('')}</select>
+          <input data-grams="${i}" inputmode="decimal" value="${x.grams ?? ''}" placeholder="g" aria-label="Gramy"><span class="small muted">g</span>
+          <b class="small nowrap" id="line-kcal-${i}">${lineKcal(x)}</b></div>` : '<span class="small error-text">Nie znalazłem; dodaj osobno.</span>'}
+      </div>`).join('')}
+      ${ok.length ? `<div class="row"><button type="button" class="btn" id="text-add">${icon('plus', 'icon-sm')} Dodaj ${ok.length} ${ok.length === 1 ? 'produkt' : ok.length < 5 ? 'produkty' : 'produktów'}</button></div>` : ''}
+      <p class="small muted" style="margin:0 16px 12px">Gramy z typowych miar domowych; popraw je, jeśli trzeba.</p></div>` : '';
+    document.getElementById('text-add')?.addEventListener('click', async () => {
+      for (const x of textLines) {
+        const o = x.options[x.pick];
+        if (!o || !(x.grams > 0)) continue;
+        const food = saveFood(o);
+        food.lastUsed = new Date().toISOString();
+        dayEntries(date).push({ id: uid('e'), meal, foodId: food.id, grams: x.grams });
+      }
+      await save();
+      location.hash = `#/diet/${date}`;
+    });
+  };
+  document.getElementById('text-form').onsubmit = async (ev) => {
+    ev.preventDefault();
+    await loadLocal();
+    textLines = await Promise.all(parseMealText(ev.target.text.value).map(async (line) => {
+      const q = searchName(line.name);
+      const seen = new Set();
+      const options = [
+        ...rankByText(data.foods, q, mineText, 3), ...rankByText(BASIC_FOODS, q, (f) => f.name, 3), ...(await searchLocal(q, 3)),
+      ].filter((o) => !seen.has(savedKey(o)) && seen.add(savedKey(o))).slice(0, 6);
+      const qtyText = line.unit === 'g' || line.unit === 'ml' ? `${fmt(line.qty)} ${line.unit}` : `${fmt(line.qty, 2)} × ${UNITS[line.unit][0]}`;
+      return { text: `${qtyText}: ${line.name}`, line, options, pick: 0, grams: options[0] ? lineGrams(line, options[0]) ?? options[0].servingG ?? 100 : null };
+    }));
+    drawLines();
+  };
+  document.getElementById('text-lines').onchange = (ev) => {
+    const sel = ev.target.closest('[data-line]');
+    if (!sel) return;
+    const x = textLines[Number(sel.dataset.line)];
+    x.pick = Number(sel.value);
+    x.grams = lineGrams(x.line, x.options[x.pick]) ?? x.options[x.pick].servingG ?? x.grams;
+    drawLines();
+  };
+  document.getElementById('text-lines').oninput = (ev) => {
+    const g = ev.target.closest('[data-grams]');
+    if (!g) return;
+    const i = Number(g.dataset.grams);
+    textLines[i].grams = Number(g.value.replace(',', '.')) || null;
+    document.getElementById(`line-kcal-${i}`).textContent = lineKcal(textLines[i]);
+  };
   document.getElementById('quick-form').onsubmit = async (ev) => {
     ev.preventDefault();
     const f = new FormData(ev.target);
@@ -2076,6 +2407,16 @@ function viewFoodAdd(date, meal) {
   };
 }
 
+// Household measures that make sense for a product: [unit, label, grams].
+function entryMeasures(food) {
+  const n = food.name.toLowerCase();
+  const list = [['szt', 'sztuka'], ['porcja', 'porcja'], ['kromka', 'kromka', /chleb|bagiet|tost/], ['plaster', 'plaster', /ser|szynk|wędlin|polędwic|salami|indyk/],
+    ['lyzka', 'łyżka'], ['lyzeczka', 'łyżeczka'], ['szklanka', 'szklanka'], ['garsc', 'garść', /orzech|migdał|borówk|malin|truskaw|płatk|szpinak|rukol|sałat|winogron|pestk/]];
+  return list.filter(([, , re]) => !re || re.test(n))
+    .map(([unit, label]) => [unit, label, unitGrams(unit, food.name, food.servingG)])
+    .filter(([, , g]) => g);
+}
+
 const FOOD_SOURCES = { off: 'Open Food Facts', usda: 'USDA', basic: 'produkt podstawowy (USDA)', recipe: 'przepis' };
 
 function viewEntry(date, entryId) {
@@ -2096,6 +2437,7 @@ function viewEntry(date, entryId) {
         <label class="row"><span class="grow">Posiłek</span><select name="meal">${Object.entries(MEALS).map(([k, v]) => `<option value="${k}" ${k === entry.meal ? 'selected' : ''}>${v}</option>`).join('')}</select></label>
       </div>
       ${food.servingG ? `<p class="muted small" style="margin:0 4px 8px">Porcja z opakowania: ${fmt(food.servingG)} g</p>` : ''}
+      <div class="measures">${entryMeasures(food).map(([unit, label, g]) => `<button type="button" data-unit="${unit}" data-g="${g}">${label} · ${fmt(g)} g</button>`).join('')}</div>
       <div class="card"><b id="calc">${calc(grams)}</b></div>
       <button class="btn" type="submit">${icon('check', 'icon-sm')} ${isNew ? 'Dodaj' : 'Zapisz'}</button>
     </form>
@@ -2114,6 +2456,17 @@ function viewEntry(date, entryId) {
   form.grams.oninput = () => {
     const g = Number(form.grams.value.replace(',', '.'));
     document.getElementById('calc').textContent = Number.isFinite(g) ? calc(g) : '–';
+  };
+  // Tapping a measure sets one of it; tapping the same one again adds another.
+  let lastUnit = null;
+  view.querySelector('.measures').onclick = (ev) => {
+    const b = ev.target.closest('[data-unit]');
+    if (!b) return;
+    const g = Number(b.dataset.g);
+    const cur = Number(form.grams.value.replace(',', '.')) || 0;
+    form.grams.value = Math.round(lastUnit === b.dataset.unit ? cur + g : g);
+    lastUnit = b.dataset.unit;
+    form.grams.oninput();
   };
   form.onsubmit = async (ev) => {
     ev.preventDefault();
@@ -2476,20 +2829,27 @@ function viewTemplate(id) {
     <button class="btn" id="use-template">${icon('plus', 'icon-sm')} Dodaj do moich planów</button>
   `, { back: '#/templates' });
   document.getElementById('use-template').onclick = async () => {
-    for (const exId of templateExerciseIds(t)) {
-      if (!exerciseById.has(exId)) {
-        const ex = { id: exId, name: CATALOG[exId]?.name ?? exId, uses: 0 };
-        data.exercises.push(ex);
-        exerciseById.set(exId, ex);
-      }
-    }
-    const program = buildProgram(t, uid('plan'));
-    data.programs.push(program);
-    data.settings.currentProgram = program.id;
-    data.settings.currentWeek = 1;
+    const program = addTemplateProgram(t);
     await save();
     location.hash = `#/plans/${program.id}`;
   };
+}
+
+// Copies a ready-made plan into "my plans" and makes it the current one.
+function addTemplateProgram(t) {
+  for (const exId of templateExerciseIds(t)) addCatalogExercise(exId);
+  const program = buildProgram(t, uid('plan'));
+  data.programs.push(program);
+  data.settings.currentProgram = program.id;
+  data.settings.currentWeek = 1;
+  return program;
+}
+
+function addCatalogExercise(exId, extra = {}) {
+  if (exerciseById.has(exId)) return;
+  const ex = { id: exId, name: CATALOG[exId]?.name ?? extra.name ?? exId, uses: 0, ...(CATALOG[exId] ? {} : extra) };
+  data.exercises.push(ex);
+  exerciseById.set(exId, ex);
 }
 
 const MEAL_FILTERS = [['all', 'Wszystkie'], ...Object.entries(MEALS), ['vege', 'Wege'], ['quick', 'Do 10 min']];
@@ -2603,6 +2963,8 @@ const ROUTES = [
   [/^#\/measure$/, viewMeasure, 'progress'],
   [/^#\/history\/([^/]+)$/, viewHistory, 'progress'],
   [/^#\/settings$/, viewSettings, null],
+  [/^#\/start$/, viewStart, 'today'],
+  [/^#\/plan\/([\w-]+)$/, viewPlanImport, 'plans'],
   [/^#\/profile$/, viewProfile, null],
   [/^#\/exercises$/, viewExercises, null],
   [/^#\/exercise\/([^/]+)$/, viewExercise, null],
@@ -2615,7 +2977,13 @@ function route() {
     keepAwake(false);
   }
   document.getElementById('tabbar').hidden = !data;
-  if (!data && hash !== '#/settings') return viewEmpty();
+  if (!data) {
+    if (hash === '#/welcome') return viewWelcome();
+    // A shared plan opened before the first start waits until the profile is set up.
+    const shared = hash.match(/^#\/plan\/([\w-]+)$/);
+    if (shared) db.set('pendingPlan', shared[1]);
+    if (hash !== '#/settings') return viewEmpty();
+  }
   for (const [re, fn, tab] of ROUTES) {
     const m = hash.match(re);
     if (m) {

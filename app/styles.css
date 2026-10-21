@@ -380,3 +380,29 @@ code { font-size: 13px; background: var(--bg); padding: 1px 5px; border-radius: 
 .proposal { align-items: flex-start; }
 .proposal .icon-sm, .proposal input { margin-top: 2px; }
 a.link-btn { text-decoration: none; }
+
+/* Supersets */
+.ss { display: inline-grid; place-items: center; min-width: 22px; height: 22px; padding: 0 5px; border-radius: 6px; background: var(--carbs); color: #fff; font-size: 12px; font-weight: 700; vertical-align: 2px; }
+.log-card.superset { border-left: 4px solid var(--carbs); }
+.ss-title { color: var(--carbs); text-transform: none; letter-spacing: 0; }
+.icon-btn.on { background: var(--carbs); color: #fff; }
+
+/* First start */
+.choice { display: grid; gap: 8px; }
+.choice.row4 { grid-template-columns: repeat(4, 1fr); }
+.choice input { display: none; }
+.choice span { display: flex; align-items: center; justify-content: center; min-height: 48px; padding: 0 12px; border-radius: 12px; background: var(--card); font-weight: 500; text-align: center; }
+.choice input:checked + span { background: var(--accent); color: #fff; font-weight: 600; }
+
+/* Household measures and quick text entry */
+.measures { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 4px 12px; }
+.measures button { border: 0; border-radius: 8px; padding: 6px 10px; background: var(--card); color: var(--accent); font: inherit; font-size: 14px; font-weight: 500; }
+.error-text { color: #ff3b30; }
+.line-pick { display: grid; grid-template-columns: 1fr 64px auto 64px; gap: 6px; align-items: center; }
+.text-lines .row.stacked { flex-direction: column; align-items: stretch; gap: 6px; }
+.text-lines .row.stacked > span { font-size: 13px; color: var(--muted); }
+.line-pick select, .line-pick input { width: 100%; min-width: 0; min-height: 36px; border: 0; border-radius: 8px; padding: 6px 8px; background: var(--bg); color: var(--text); font: inherit; font-size: 15px; }
+.line-pick input { text-align: right; }
+.line-pick b { text-align: right; }
+.log-actions { flex-wrap: wrap; column-gap: 16px; row-gap: 0; }
+.log-actions .link-btn { white-space: nowrap; }
