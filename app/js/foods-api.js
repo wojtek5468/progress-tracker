@@ -2,6 +2,8 @@
 // Open Food Facts: packaged products (ODbL), 10 searches/min per user, so we search on submit, not per keystroke.
 // USDA FoodData Central: generic foods (CC0), English names; DEMO_KEY allows 30 requests/hour.
 
+import { queryToEnglish, nameToPolish } from './usda-pl.js';
+
 const OFF_FIELDS = 'code,product_name,product_name_pl,brands,nutriments,serving_quantity';
 
 const num = (v) => (v == null || v === '' || Number.isNaN(Number(v)) ? null : Math.round(Number(v) * 10) / 10);
@@ -42,7 +44,7 @@ const USDA_NUTRIENTS = { 208: 'kcal', 203: 'p', 204: 'f', 205: 'c' };
 
 export async function searchUsda(query, apiKey) {
   const url = `https://api.nal.usda.gov/fdc/v1/foods/search?api_key=${encodeURIComponent(apiKey || 'DEMO_KEY')}`
-    + `&query=${encodeURIComponent(query)}&pageSize=25&dataType=Foundation&dataType=SR%20Legacy`;
+    + `&query=${encodeURIComponent(queryToEnglish(query))}&pageSize=25&dataType=Foundation&dataType=SR%20Legacy`;
   const res = await fetch(url);
   if (res.status === 429) throw new Error('Limit zapytań USDA wyczerpany. Dodaj własny darmowy klucz w ustawieniach.');
   if (!res.ok) throw new Error(`USDA odpowiedział błędem ${res.status}.`);
@@ -53,6 +55,6 @@ export async function searchUsda(query, apiKey) {
       const key = USDA_NUTRIENTS[Number(n.nutrientNumber)];
       if (key && n.value != null) per100[key] = num(n.value);
     }
-    return per100.kcal == null ? null : { source: 'usda', code: String(f.fdcId), name: f.description, brand: null, per100 };
+    return per100.kcal == null ? null : { source: 'usda', code: String(f.fdcId), name: nameToPolish(f.description), original: f.description, brand: null, per100 };
   }).filter(Boolean);
 }

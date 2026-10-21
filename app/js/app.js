@@ -3,8 +3,8 @@ import * as db from './db.js';
 import { CATALOG, CATEGORIES } from './exercise-catalog.js';
 import { computeTargets, SOURCES, GOALS, ACTIVITY } from './nutrition.js';
 import { searchOff, searchUsda, lookupBarcode } from './foods-api.js';
-import { TEMPLATES, buildProgram, templateExerciseIds } from './plan-templates.js';
-import { RECIPES, INGREDIENTS, recipeTotals, recipePer100 } from './recipes.js';
+import { TEMPLATES, PLACES, buildProgram, templateExerciseIds } from './plan-templates.js';
+import { RECIPES, INGREDIENTS, recipeTotals, recipePer100, isVege } from './recipes.js';
 
 const MEALS = { breakfast: 'Śniadanie', lunch: 'Obiad', dinner: 'Kolacja', snack: 'Przekąski' };
 
@@ -228,7 +228,7 @@ function viewPlans(programId) {
     <button type="button" id="new-program" aria-label="Nowa kategoria">${icon('plus', 'icon-sm')}</button>
   </div>
   <a class="list row" href="#/templates">${icon('calendar-days', 'icon-sm')}<div class="grow"><div class="title">Gotowe plany</div>
-    <div class="sub">FBW, 5×5, Góra/Dół, Push/Pull/Nogi, trening w domu</div></div><span class="chev">${icon('chevron-right', 'icon-sm')}</span></a>`;
+    <div class="sub">${TEMPLATES.length} planów: siłownia, dom, bieganie, mobilność</div></div><span class="chev">${icon('chevron-right', 'icon-sm')}</span></a>`;
 
 
   if (!selected) {
@@ -1178,7 +1178,7 @@ function viewFoodAdd(date, meal) {
     if (!state.query) {
       return `<p class="muted small" style="margin:8px 4px">${state.tab === 'off'
         ? 'Produkty ze sklepów z bazy Open Food Facts. Wpisz nazwę lub kod kreskowy i stuknij Szukaj.'
-        : 'Produkty podstawowe z bazy USDA (nazwy po angielsku, np. „chicken breast raw”, „rice white cooked”).'}</p>`;
+        : 'Produkty podstawowe z bazy USDA, np. „pierś z kurczaka surowa”, „ryż biały gotowany”. Nazwy tłumaczymy automatycznie; po dodaniu możesz je poprawić.'}</p>`;
     }
     return state.results.length ? `<div class="list">${state.results.map(resultRow).join('')}</div>`
       : '<p class="muted small" style="margin:8px 4px">Nic nie znaleziono. Spróbuj innej nazwy albo dodaj własny produkt.</p>';
@@ -1506,12 +1506,14 @@ function viewSteps() {
 function viewTemplates() {
   render('Gotowe plany', `
     <p class="muted small" style="margin:0 4px 12px">Plan zostanie skopiowany do Twoich kategorii na 4 tygodnie. Potem możesz w nim zmieniać ćwiczenia, serie i ciężary.</p>
+    ${Object.entries(PLACES).map(([place, label]) => `
+    <div class="section-title">${label}</div>
     <div class="list">
-      ${TEMPLATES.map((t) => `<a class="row" href="#/template/${t.id}">
+      ${TEMPLATES.filter((t) => t.place === place).map((t) => `<a class="row" href="#/template/${t.id}">
         <div class="grow"><div class="title">${esc(t.name)}</div>
         <div class="sub">${t.perWeek}× w tygodniu · ${esc(t.level)} · ${esc(t.equipment)}</div></div>
         <span class="chev">${icon('chevron-right', 'icon-sm')}</span></a>`).join('')}
-    </div>
+    </div>`).join('')}
   `, { back: '#/plans' });
 }
 
@@ -1532,7 +1534,9 @@ function viewTemplate(id) {
           <div class="sub clamp">${esc(CATALOG[exId]?.desc ?? '')}</div></div>
           <b class="nowrap">${sets} × ${esc(reps)}</b></a>`).join('')}
       </div>`).join('')}
-    <p class="muted small" style="margin:12px 4px">Każdy trening ma też krótką rozgrzewkę i wyciszenie. RIR = ile powtórzeń zostawiasz w zapasie; plan zaczyna od RIR 3 i schodzi do 1 w 4. tygodniu.</p>
+    <p class="muted small" style="margin:12px 4px">${t.noRir
+      ? (t.weekSessions ? 'Pokazany jest 1. tydzień; w kolejnych odcinki biegu się wydłużają.' : 'Ćwiczenia wykonuj spokojnie, w zakresie bez bólu.')
+      : 'Każdy trening ma też krótką rozgrzewkę i wyciszenie. RIR = ile powtórzeń zostawiasz w zapasie; plan zaczyna od RIR 3 i schodzi do 1 w 4. tygodniu.'}</p>
     <button class="btn" id="use-template">${icon('plus', 'icon-sm')} Dodaj do moich planów</button>
   `, { back: '#/templates' });
   document.getElementById('use-template').onclick = async () => {
@@ -1553,12 +1557,13 @@ function viewTemplate(id) {
   };
 }
 
-const MEAL_FILTERS = [['all', 'Wszystkie'], ...Object.entries(MEALS)];
+const MEAL_FILTERS = [['all', 'Wszystkie'], ...Object.entries(MEALS), ['vege', 'Wege'], ['quick', 'Do 10 min']];
+const recipeFilter = (r, f) => f === 'all' || (f === 'vege' ? isVege(r) : f === 'quick' ? r.minutes <= 10 : r.meals.includes(f));
 
 function viewRecipes(date, meal) {
   let filter = meal && MEALS[meal] ? meal : 'all';
   const draw = () => {
-    const list = RECIPES.filter((r) => filter === 'all' || r.meals.includes(filter));
+    const list = RECIPES.filter((r) => recipeFilter(r, filter));
     render('Przepisy', `
       <div class="segmented">
         ${MEAL_FILTERS.map(([k, l]) => `<a href="#" data-filter="${k}" class="${filter === k ? 'active' : ''}">${l}</a>`).join('')}
@@ -1568,7 +1573,7 @@ function viewRecipes(date, meal) {
           const t = recipeTotals(r);
           const n = r.portions;
           return `<a class="row" href="#/recipe/${r.id}${date ? `/${date}/${meal}` : ''}">
-            <div class="grow"><div class="title">${esc(r.name)}</div>
+            <div class="grow"><div class="title">${esc(r.name)}${isVege(r) ? ' <span class="badge">wege</span>' : ''}</div>
             <div class="sub">${r.minutes} min · porcja: ${fmt(t.kcal / n)} kcal · B ${fmt(t.p / n)} · T ${fmt(t.f / n)} · W ${fmt(t.c / n)}</div></div>
             <span class="chev">${icon('chevron-right', 'icon-sm')}</span></a>`;
         }).join('')}
