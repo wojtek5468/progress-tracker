@@ -36,7 +36,7 @@ export async function localByCode(code) {
 }
 
 // Every word of the query must appear in name, brand or store; names starting with the
-// first word come first, then shorter names.
+// first word come first, then the most scanned products, then shorter names.
 export async function searchLocal(query, limit = 40) {
   await loadLocal();
   const words = fold(query).split(/\s+/).filter(Boolean);
@@ -46,6 +46,7 @@ export async function searchLocal(query, limit = 40) {
     if (words.every((w) => p.text.includes(w))) hits.push(p);
   }
   const first = words[0];
-  hits.sort((a, b) => (b.text.startsWith(first) - a.text.startsWith(first)) || (a.row[1].length - b.row[1].length));
+  hits.sort((a, b) => (b.text.startsWith(first) - a.text.startsWith(first))
+    || ((b.row[9] ?? 0) - (a.row[9] ?? 0)) || (a.row[1].length - b.row[1].length));
   return hits.slice(0, limit).map((p) => toFood(p.row));
 }

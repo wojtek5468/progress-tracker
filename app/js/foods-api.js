@@ -23,10 +23,15 @@ function fromOff(p) {
   };
 }
 
-// Name search (search-a-licious). Checked 2026-10-21: it sends no CORS headers, so browsers
-// block it; only used when the offline list is missing. Barcode lookups below do allow CORS.
+// Name search (search-a-licious). It sends no CORS headers (checked 2026-10-21), so the app
+// calls it through our Cloudflare Worker (tools/off-search-worker). Barcode lookups below
+// allow CORS and go straight to OFF.
+export const OFF_SEARCH_PROXY = '';
+export const onlineSearch = Boolean(OFF_SEARCH_PROXY);
+
 export async function searchOff(query) {
-  const url = `https://search.openfoodfacts.org/search?q=${encodeURIComponent(query)}&langs=pl,en&page_size=25&fields=${OFF_FIELDS}`;
+  const q = `${query} countries_tags:"en:poland"`;
+  const url = `${OFF_SEARCH_PROXY || 'https://search.openfoodfacts.org'}/search?q=${encodeURIComponent(q)}&langs=pl,en&page_size=25&fields=${OFF_FIELDS}`;
   let res;
   try {
     res = await fetch(url);
@@ -99,4 +104,35 @@ export async function submitToOff(food, { user, password }) {
   if (json && json.status !== 1) throw new Error(/signed-in|credentials|password|login/i.test(json.status_verbose ?? '')
     ? 'Zły login lub hasło do Open Food Facts.' : `Open Food Facts: ${json.status_verbose ?? 'nie zapisano'}.`);
   return json ? true : null;
+}
+
+// Shrinks a phone photo to at most 2000 px (OFF needs at least 640 px) and JPEG, so the
+// upload stays around 0.5 MB even on mobile data.
+async function shrinkPhoto(file) {
+  const img = await createImageBitmap(file);
+  const scale = Math.min(1, 2000 / Math.max(img.width, img.height));
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.round(img.width * scale);
+  canvas.height = Math.round(img.height * scale);
+  canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+  return new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.85));
+}
+
+// Adds a photo to a product in Open Food Facts. field: 'front' (package) or 'nutrition' (label).
+export async function uploadOffPhoto(code, field, file, { user, password }) {
+  const imagefield = `${field}_pl`;
+  const body = new FormData();
+  body.set('code', code);
+  body.set('imagefield', imagefield);
+  body.set('user_id', user);
+  body.set('password', password);
+  body.set(`imgupload_${imagefield}`, await shrinkPhoto(file), `${field}.jpg`);
+  const res = await fetch('https://world.openfoodfacts.org/cgi/product_image_upload.pl', { method: 'POST', body });
+  if (res.status === 403) throw new Error('Zły login lub hasło do Open Food Facts.');
+  if (!res.ok) throw new Error(`Open Food Facts odpowiedział błędem ${res.status}.`);
+  const json = await res.json().catch(() => null);
+  // A photo OFF already has comes back as an error too; that is fine for us.
+  if (json && json.status !== 'status ok' && !/already/i.test(json.error ?? '')) {
+    throw new Error(`Zdjęcie nie zostało przyjęte: ${json.error ?? json.status}.`);
+  }
 }
