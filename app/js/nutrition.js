@@ -1,0 +1,122 @@
+// Energy and macro targets. Every number here traces back to a source listed in SOURCES.
+
+export const SOURCES = [
+  {
+    id: 'mifflin',
+    label: 'Mifflin i in. (1990), równanie spoczynkowej przemiany materii',
+    url: 'https://pubmed.ncbi.nlm.nih.gov/2305711/',
+  },
+  {
+    id: 'issn',
+    label: 'ISSN Position Stand: protein and exercise (Jäger i in., 2017)',
+    url: 'https://pubmed.ncbi.nlm.nih.gov/28642676/',
+    note: '1,4–2,0 g/kg/d dla trenujących; 2,3–3,1 g/kg/d na redukcji; ok. 0,25 g/kg (20–40 g) na posiłek.',
+  },
+  {
+    id: 'helms-ffm',
+    label: 'Helms i in. (2014), białko na redukcji u trenujących siłowo',
+    url: 'https://pubmed.ncbi.nlm.nih.gov/24092765/',
+    note: '2,3–3,1 g/kg beztłuszczowej masy ciała; potrzeby rosną wraz z deficytem i niższym poziomem tkanki tłuszczowej.',
+  },
+  {
+    id: 'helms-prep',
+    label: 'Helms, Aragon, Fitschen (2014), rekomendacje żywieniowe dla trenujących',
+    url: 'https://jissn.biomedcentral.com/articles/10.1186/1550-2783-11-20',
+    note: 'Tłuszcze 15–30% energii, węglowodany: reszta, tempo redukcji 0,5–1% masy ciała tygodniowo.',
+  },
+  {
+    id: 'morton',
+    label: 'Morton i in. (2018), metaanaliza w BJSM',
+    url: 'https://bjsm.bmj.com/content/52/6/376',
+    note: 'Powyżej ok. 1,6 g/kg/d białka brak dalszych przyrostów masy beztłuszczowej (górna granica przedziału ufności ok. 2,2).',
+  },
+  {
+    id: 'efsa',
+    label: 'EFSA (2010), referencyjne wartości spożycia',
+    url: 'https://www.efsa.europa.eu/en/press/news/nda100326',
+    note: 'Tłuszcze 20–35% energii, węglowodany 45–60% energii u dorosłych.',
+  },
+];
+
+export const GOALS = {
+  reduction: 'Redukcja',
+  maintenance: 'Utrzymanie',
+  gain: 'Budowa masy',
+};
+
+export const ACTIVITY = {
+  sedentary: ['Siedzący (mało ruchu)', 1.2],
+  light: ['Lekko aktywny (3–6 tys. kroków, 2–3 treningi)', 1.375],
+  moderate: ['Aktywny (7–10 tys. kroków, 3–5 treningów)', 1.55],
+  high: ['Bardzo aktywny (praca fizyczna lub codzienne treningi)', 1.725],
+};
+
+const KCAL_PER_KG_FAT = 7700;
+const FAT_SHARE = 0.25; // middle of EFSA 20–35% and Helms 15–30%
+const round = (x, step) => Math.round(x / step) * step;
+
+export function ageFrom(birthDate, today = new Date()) {
+  if (!birthDate) return null;
+  const b = new Date(birthDate);
+  let age = today.getFullYear() - b.getFullYear();
+  if (today < new Date(today.getFullYear(), b.getMonth(), b.getDate())) age -= 1;
+  return age;
+}
+
+function averageActiveKcal(logs, days = 30) {
+  const cutoff = new Date(Date.now() - days * 864e5).toISOString().slice(0, 10);
+  const rows = (logs ?? []).filter((l) => l.date >= cutoff && l.activeKcal != null);
+  // Ignore today's partial day; require two weeks of data to trust the average.
+  const complete = rows.filter((l) => l.date < new Date().toLocaleDateString('sv-SE'));
+  return complete.length >= 14 ? complete.reduce((s, l) => s + l.activeKcal, 0) / complete.length : null;
+}
+
+export function computeTargets(profile, logs) {
+  const { weightKg: w, heightCm: h, sex } = profile;
+  const age = ageFrom(profile.birthDate) ?? (profile.birthYear ? new Date().getFullYear() - profile.birthYear : null);
+  if (!w || !h || !age || !sex) return null;
+
+  const bmr = 10 * w + 6.25 * h - 5 * age + (sex === 'female' ? -161 : 5);
+
+  const measured = profile.activitySource !== 'manual' ? averageActiveKcal(logs) : null;
+  const pal = ACTIVITY[profile.activityLevel ?? 'light']?.[1] ?? 1.375;
+  // Measured activity plus ~10% thermic effect of food, otherwise a PAL multiplier.
+  const tdee = measured != null ? (bmr + measured) * 1.1 : bmr * pal;
+
+  const goal = profile.goal ?? 'reduction';
+  const ratePct = profile.weeklyRatePct ?? (goal === 'gain' ? 0.25 : 0.5);
+  const dailyChange = (w * ratePct / 100) * KCAL_PER_KG_FAT / 7;
+  const kcal = round(goal === 'reduction' ? tdee - dailyChange : goal === 'gain' ? tdee + dailyChange : tdee, 50);
+
+  const bf = profile.bodyFatPct;
+  const ffm = bf ? w * (1 - bf / 100) : null;
+  let protein;
+  let proteinBasis;
+  if (goal === 'reduction' && ffm) {
+    protein = 2.5 * ffm;
+    proteinBasis = `2,5 g/kg beztłuszczowej masy ciała (${ffm.toFixed(1)} kg), zakres 2,3–3,1`;
+  } else if (goal === 'reduction') {
+    protein = 2.0 * w;
+    proteinBasis = '2,0 g/kg masy ciała (brak % tkanki tłuszczowej, więc liczę ostrożnie)';
+  } else {
+    protein = 1.8 * w;
+    proteinBasis = '1,8 g/kg masy ciała, zakres 1,6–2,2';
+  }
+  protein = round(Math.max(protein, 1.6 * w), 5);
+
+  const fat = round(Math.max(kcal * FAT_SHARE / 9, 0.6 * w), 5);
+  const carbs = Math.max(0, round((kcal - protein * 4 - fat * 9) / 4, 5));
+
+  return {
+    age, bmr: Math.round(bmr), tdee: round(tdee, 50), measuredActiveKcal: measured != null ? Math.round(measured) : null,
+    goal, ratePct, kcal, protein, fat, carbs, ffm: ffm ? Math.round(ffm * 10) / 10 : null,
+    proteinBasis,
+    perMealProtein: round(0.25 * w, 5),
+    shares: {
+      protein: Math.round(protein * 4 / kcal * 100),
+      fat: Math.round(fat * 9 / kcal * 100),
+      carbs: Math.round(carbs * 4 / kcal * 100),
+    },
+    weeklyChangeKg: Math.round(w * ratePct / 100 * 100) / 100,
+  };
+}

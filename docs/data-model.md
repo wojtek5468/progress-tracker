@@ -35,3 +35,15 @@ Pola puste są pomijane. Jednostki: kg, cm, sekundy, minuty snu, daty ISO `YYYY-
 - Zakresy obciążeń i powtórzeń, których nie da się zamienić na liczbę (np. `16kg/20kg`, `6*2`, `30s`), trafiają do `loadText` / `repsText`.
 - `percent1RM` jest liczony od 1RM z czasu danego tygodnia, więc `plannedKg` zostaje taki, jak w arkuszu.
 - Zdrowie: kroki i aktywne kcal liczone per dzień z jednego źródła (tego z największą sumą), żeby iPhone i pierścień/zegarek się nie dublowały. Sen przypisany do dnia pobudki, nakładające się odcinki scalane.
+
+## Diet diary (added in the app, not in the seed)
+
+| Field | Shape | Notes |
+|---|---|---|
+| `foods` | `[{id, name, brand, source: 'off'\|'usda'\|'custom'\|'recipe', code, per100: {kcal, p, f, c}, servingG, lastUsed}]` | Products the user picked from Open Food Facts / USDA, created by hand, or built-in recipes added to the diary. |
+| `mealTemplates` | `[{id, name, items: [{foodId, grams}]}]` | "Zapisz jako posiłek": a saved set of products added in one tap. |
+| `foodLog` | `{ 'YYYY-MM-DD': [{id, meal: 'breakfast'\|'lunch'\|'dinner'\|'snack', foodId, grams}] }` | Macros are computed from the product at read time, so editing a product updates past entries. |
+| `dailyLogs[].steps`, `.activeKcal` | numbers | Also written by manual entry or the iOS Shortcut paste (`kroki=… kcal=…`). |
+| `settings.stepsGoal`, `settings.usdaKey`, `settings.foodTab` | | Daily step goal (default 8000), optional personal USDA API key, last used tab in the add-food screen. |
+
+Programs copied from ready-made plans (`app/js/plan-templates.js`) carry `templateId`.
