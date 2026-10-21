@@ -1,8 +1,8 @@
 // Offline-first cache for the app shell. Bump VERSION when shipping changes.
-const VERSION = 'v2';
+const VERSION = 'v3';
 const SHELL = [
   './', 'index.html', 'styles.css', 'manifest.webmanifest',
-  'js/app.js', 'js/db.js', 'js/icons.js',
+  'js/app.js', 'js/db.js', 'js/icons.js', 'js/exercise-catalog.js', 'js/nutrition.js',
   'icons/icon.svg', 'icons/apple-touch-icon.png', 'icons/icon-192.png', 'icons/icon-512.png',
 ];
 
