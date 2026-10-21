@@ -1,9 +1,10 @@
 import { icon } from './icons.js';
 import * as db from './db.js';
 import { CATALOG, CATEGORIES } from './exercise-catalog.js';
-import { computeTargets, SOURCES, GOALS, ACTIVITY } from './nutrition.js';
+import { computeTargets, SOURCES, GOALS, ACTIVITY, weightTrend, trendRate, adaptiveTdee, ADAPTIVE_MIN_DAYS } from './nutrition.js';
 import { searchOff, searchUsda, lookupBarcode } from './foods-api.js';
-import { TEMPLATES, PLACES, buildProgram, templateExerciseIds } from './plan-templates.js';
+import { TEMPLATES, PLACES, AUDIENCES, forAudience, buildProgram, templateExerciseIds, templatePreview } from './plan-templates.js';
+import { scanBarcode } from './scanner.js';
 import { RECIPES, INGREDIENTS, recipeTotals, recipePer100, isVege } from './recipes.js';
 
 const MEALS = { breakfast: 'Śniadanie', lunch: 'Obiad', dinner: 'Kolacja', snack: 'Przekąski' };
@@ -15,7 +16,10 @@ const backBtn = document.getElementById('back');
 
 let data = null;
 let exerciseById = new Map();
+// Barcode that was not found in Open Food Facts; attached to the next custom product.
+let pendingBarcode = null;
 
+const NO_1RM_CATEGORIES = new Set(['Siła eksplozywna', 'Kondycja', 'Mobilność', 'Rozgrzewka']);
 const BLOCK_NAMES = { warmup: 'Rozgrzewka', main: 'Część główna', cooldown: 'Wyciszenie' };
 
 // ---------- helpers ----------
@@ -35,7 +39,12 @@ const exInfo = (id) => {
 const exName = (id) => exInfo(id).name;
 const uid = (prefix) => `${prefix}-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`;
 const sessionTitle = (s) => s.name || `Trening ${s.order}`;
-const targets = () => computeTargets(data.profile, data.dailyLogs);
+const targets = () => computeTargets(data.profile, data.dailyLogs, data.profile.tdeeMode === 'adaptive' ? adaptive() : null);
+const weightPoints = () => (data.bodyMeasurements ?? []).filter((m) => m.weightKg).map((m) => ({ date: m.date, value: m.weightKg }));
+// Calories eaten per day, from the food diary.
+const dailyIntake = () => Object.fromEntries(Object.entries(data.foodLog ?? {})
+  .filter(([, entries]) => entries.length).map(([d, entries]) => [d, sumMacros(entries).kcal]));
+const adaptive = () => adaptiveTdee(weightTrend(weightPoints()), dailyIntake(), todayIso());
 const dateLabel = (iso) => new Date(iso).toLocaleDateString('pl-PL', { day: 'numeric', month: 'short' });
 
 function setData(d) {
@@ -61,12 +70,23 @@ function migrate(d) {
   p.goal ??= 'reduction';
   p.activitySource ??= (d.dailyLogs ?? []).some((l) => l.activeKcal != null) ? 'health' : 'manual';
   p.activityLevel ??= 'light';
+  // Neutral names for the blocks imported from the workbook (only if the user has not renamed them).
+  for (const prog of d.programs) {
+    const name = LEGACY_PROGRAM_NAMES[prog.id];
+    if (name && prog.name === name[0]) prog.name = name[1];
+  }
 }
+
+const LEGACY_PROGRAM_NAMES = {
+  'blok-1': ['Blok 1 (z trenerem)', 'Cykl roczny (35 tyg.)'],
+  'blok-2': ['Blok 2.0', 'Powrót do siły (3 tyg.)'],
+  'solo': ['SOLO', 'Siła + kondycja (2 tyg.)'],
+};
 
 function render(title, html, { back = null } = {}) {
   titleEl.textContent = title;
   backBtn.hidden = !back;
-  backBtn.onclick = back ? () => { location.hash = back; } : null;
+  backBtn.onclick = back === 'history' ? () => history.back() : back ? () => { location.hash = back; } : null;
   view.oninput = view.onclick = null;
   view.innerHTML = html;
   window.scrollTo(0, 0);
@@ -104,6 +124,13 @@ function current1RM(exerciseId) {
   if (!rows.length) return null;
   const dated = rows.filter((m) => m.date).sort((a, b) => a.date.localeCompare(b.date));
   return (dated.at(-1) ?? rows.reduce((a, b) => (b.estimated1RM > a.estimated1RM ? b : a))).estimated1RM;
+}
+
+// Sets from the most recent logged workout that included this exercise.
+function previousSets(exerciseId, beforeDate = '9999') {
+  const logs = (data.workoutLogs ?? []).filter((l) => l.date < beforeDate && l.entries.some((e) => e.exerciseId === exerciseId));
+  const last = logs.sort((a, b) => a.date.localeCompare(b.date) || a.id.localeCompare(b.id)).at(-1);
+  return last ? { date: last.date, sets: last.entries.filter((e) => e.exerciseId === exerciseId).flatMap((e) => e.sets) } : null;
 }
 
 function suggestedKg(item) {
@@ -215,72 +242,83 @@ async function viewToday() {
     </div>`);
 }
 
-function viewPlans(programId) {
-  const programs = data.programs;
-  const selected = programs.find((p) => p.id === (programId ?? data.settings.plansTab))
-    ?? currentWeek()?.program ?? programs.at(-1);
-  if (selected && data.settings.plansTab !== selected.id) {
-    data.settings.plansTab = selected.id;
-    save();
-  }
-  const tabs = `<div class="segmented" role="tablist">
-    ${[...programs].reverse().map((p) => `<a role="tab" href="#/plans/${p.id}" class="${p === selected ? 'active' : ''}">${esc(p.name)}</a>`).join('')}
-    <button type="button" id="new-program" aria-label="Nowa kategoria">${icon('plus', 'icon-sm')}</button>
-  </div>
-  <a class="list row" href="#/templates">${icon('calendar-days', 'icon-sm')}<div class="grow"><div class="title">Gotowe plany</div>
-    <div class="sub">${TEMPLATES.length} planów: siłownia, dom, bieganie, mobilność</div></div><span class="chev">${icon('chevron-right', 'icon-sm')}</span></a>`;
+const plansSwitch = (active) => `<div class="segmented" role="tablist">
+  <a role="tab" href="#/plans" class="${active === 'mine' ? 'active' : ''}">Moje plany</a>
+  <a role="tab" href="#/templates" class="${active === 'ready' ? 'active' : ''}">Gotowe plany</a>
+</div>`;
 
-
-  if (!selected) {
-    render('Plany', `${tabs}<div class="empty">${icon('calendar-days')}<h2>Brak planów</h2><p>Dodaj pierwszą kategorię przyciskiem +.</p></div>`);
-  } else {
-    render('Plany', `
-      ${tabs}
-      ${selected.weeks.length ? `<div class="list">
-        ${[...selected.weeks].reverse().map((w) => `
-          <a class="row" href="#/week/${selected.id}/${w.number}">
-            <div class="grow"><div class="title">Tydzień ${w.number}${w.label ? ` · ${esc(w.label)}` : ''}</div>
-            <div class="sub">${w.sessions.length} ${w.sessions.length === 1 ? 'trening' : 'treningi'}</div></div>
-            ${currentWeek()?.week === w ? '<span class="badge">bieżący</span>' : ''}
-            <span class="chev">${icon('chevron-right', 'icon-sm')}</span>
-          </a>`).join('')}
-      </div>` : '<p class="muted small" style="margin:0 4px 12px">Ta kategoria nie ma jeszcze tygodni.</p>'}
-      <button class="btn" id="add-week">${icon('plus', 'icon-sm')} Dodaj tydzień</button>
-      <div class="actions">
-        <button type="button" class="btn secondary" id="rename-program">Zmień nazwę</button>
-        <button type="button" class="btn danger" id="delete-program">${icon('trash-2', 'icon-sm')} Usuń kategorię</button>
-      </div>
-    `);
-    document.getElementById('add-week').onclick = async () => {
-      const number = Math.max(0, ...selected.weeks.map((w) => w.number)) + 1;
-      selected.weeks.push({ id: `${selected.id}-w${number}`, number, label: null, sessions: [] });
-      await save();
-      location.hash = `#/week/${selected.id}/${number}`;
-    };
-    document.getElementById('rename-program').onclick = async () => {
-      const name = prompt('Nowa nazwa kategorii', selected.name)?.trim();
-      if (!name) return;
-      selected.name = name;
-      await save();
-      route();
-    };
-    document.getElementById('delete-program').onclick = async () => {
-      if (!confirm(`Usunąć kategorię „${selected.name}” razem ze wszystkimi tygodniami? Historia treningów zostaje.`)) return;
-      data.programs = data.programs.filter((p) => p !== selected);
-      if (data.settings.currentProgram === selected.id) delete data.settings.currentProgram;
-      delete data.settings.plansTab;
-      await save();
-      location.hash = '#/plans';
-      route();
-    };
-  }
+function viewPlans() {
+  const cur = currentWeek();
+  render('Plany', `
+    ${plansSwitch('mine')}
+    ${data.programs.length ? `<div class="list">
+      ${[...data.programs].reverse().map((p) => `
+        <a class="row" href="#/plans/${p.id}">
+          <div class="grow"><div class="title">${esc(p.name)}</div>
+          <div class="sub">${p.weeks.length} ${p.weeks.length === 1 ? 'tydzień' : p.weeks.length < 5 ? 'tygodnie' : 'tygodni'}${cur?.program === p ? ` · teraz tydzień ${cur.week.number}` : ''}</div></div>
+          ${cur?.program === p ? '<span class="badge">w trakcie</span>' : ''}
+          <span class="chev">${icon('chevron-right', 'icon-sm')}</span>
+        </a>`).join('')}
+    </div>` : `<div class="empty">${icon('calendar-days')}<h2>Brak planów</h2><p>Wybierz gotowy plan albo ułóż własny.</p>
+      <a class="btn" href="#/templates">Przeglądaj gotowe plany</a></div>`}
+    <button class="btn secondary" id="new-program" style="margin-top:12px">${icon('plus', 'icon-sm')} Ułóż własny plan</button>
+  `);
   document.getElementById('new-program').onclick = async () => {
-    const name = prompt('Nazwa nowej kategorii (np. „Siła 2026”)')?.trim();
+    const name = prompt('Nazwa planu (np. „Siła – jesień”)')?.trim();
     if (!name) return;
     const program = { id: uid('plan'), name, weeks: [] };
     data.programs.push(program);
     await save();
     location.hash = `#/plans/${program.id}`;
+  };
+}
+
+function viewProgram(programId) {
+  const selected = data.programs.find((p) => p.id === programId);
+  if (!selected) return viewPlans();
+  const isCurrent = currentWeek()?.program === selected;
+  render(selected.name, `
+    ${selected.weeks.length ? `<div class="list">
+      ${[...selected.weeks].reverse().map((w) => `
+        <a class="row" href="#/week/${selected.id}/${w.number}">
+          <div class="grow"><div class="title">Tydzień ${w.number}${w.label ? ` · ${esc(w.label)}` : ''}</div>
+          <div class="sub">${w.sessions.length} ${w.sessions.length === 1 ? 'trening' : 'treningi'}</div></div>
+          ${currentWeek()?.week === w ? '<span class="badge">bieżący</span>' : ''}
+          <span class="chev">${icon('chevron-right', 'icon-sm')}</span>
+        </a>`).join('')}
+    </div>` : '<p class="muted small" style="margin:0 4px 12px">Ten plan nie ma jeszcze tygodni.</p>'}
+    <button class="btn" id="add-week">${icon('plus', 'icon-sm')} Dodaj tydzień</button>
+    ${!isCurrent && selected.weeks.length ? `<button class="btn secondary" id="make-current" style="margin-top:12px">${icon('play', 'icon-sm')} Realizuj ten plan</button>` : ''}
+    <div class="actions">
+      <button type="button" class="btn secondary" id="rename-program">Zmień nazwę</button>
+      <button type="button" class="btn danger" id="delete-program">${icon('trash-2', 'icon-sm')} Usuń plan</button>
+    </div>
+  `, { back: '#/plans' });
+  document.getElementById('add-week').onclick = async () => {
+    const number = Math.max(0, ...selected.weeks.map((w) => w.number)) + 1;
+    selected.weeks.push({ id: `${selected.id}-w${number}`, number, label: null, sessions: [] });
+    await save();
+    location.hash = `#/week/${selected.id}/${number}`;
+  };
+  document.getElementById('make-current')?.addEventListener('click', async () => {
+    data.settings.currentProgram = selected.id;
+    data.settings.currentWeek = selected.weeks[0].number;
+    await save();
+    route();
+  });
+  document.getElementById('rename-program').onclick = async () => {
+    const name = prompt('Nowa nazwa planu', selected.name)?.trim();
+    if (!name) return;
+    selected.name = name;
+    await save();
+    route();
+  };
+  document.getElementById('delete-program').onclick = async () => {
+    if (!confirm(`Usunąć plan „${selected.name}” razem ze wszystkimi tygodniami? Historia treningów zostaje.`)) return;
+    data.programs = data.programs.filter((p) => p !== selected);
+    if (data.settings.currentProgram === selected.id) delete data.settings.currentProgram;
+    await save();
+    location.hash = '#/plans';
   };
 }
 
@@ -404,6 +442,25 @@ function viewSession(programId, number, order) {
   };
 }
 
+function adaptiveCard(t) {
+  const a = adaptive();
+  const on = data.profile.tdeeMode === 'adaptive';
+  const body = a.tdee
+    ? `<h2>${fmt(a.tdee)} <span class="muted" style="font-size:15px;font-weight:500">kcal/dzień</span></h2>
+       <p class="small">Z ${a.span} dni: średnio ${fmt(a.avgIntake)} kcal zjedzone, trend wagi ${a.changeKg > 0 ? '+' : ''}${fmt(a.changeKg, 2)} kg. Wzór daje ${fmt(t.formulaTdee)} kcal.</p>`
+    : `<p class="small">Za mało danych z ostatnich 4 tygodni. Brakuje: ${[
+      a.span < ADAPTIVE_MIN_DAYS && `${ADAPTIVE_MIN_DAYS} dni między pierwszym a ostatnim ważeniem (jest ${a.span})`,
+      a.weighIns < 4 && `co najmniej 4 ważeń (jest ${a.weighIns})`,
+      a.intakeDays < Math.max(10, a.span * 0.6) && `posiłków wpisanych w większość dni (jest ${a.intakeDays})`,
+    ].filter(Boolean).join(', ')}.</p>`;
+  return `<div class="card">
+    <p>Zapotrzebowanie z Twoich danych${on ? ' · używane w celu' : ''}</p>
+    ${body}
+    <button class="btn secondary" id="tdee-mode" style="margin-top:12px">${on ? 'Licz cel ze wzoru' : 'Licz cel z moich danych'}</button>
+    <p class="small muted" style="margin-top:8px">Liczone codziennie z trendu wagi i dziennika posiłków, więc cel sam się koryguje, gdy metabolizm lub aktywność się zmienią.${on && !a.tdee ? ' Dopóki danych jest za mało, cel liczy się ze wzoru.' : ''}</p>
+  </div>`;
+}
+
 function viewNutrition() {
   const t = targets();
 
@@ -426,21 +483,22 @@ function viewNutrition() {
             <b style="text-align:right">${g} g</b></div>
           <div class="macro-sub">${share}% energii · ${fmt(g / w, 1)} g/kg</div>`).join('')}
       </div>
-           <a class="btn secondary" style="margin-top:14px" href="#/profile">Zmień cel lub dane</a>
-
+      <a class="btn secondary" style="margin-top:14px" href="#/profile">Zmień cel lub dane</a>
     </div>
+    ${adaptiveCard(t)}
     <details class="list">
       <summary><span class="grow">Jak to policzyłem</span><span class="chev">${icon('chevron-right', 'icon-sm')}</span></summary>
       <ul class="explain">
         <li><b>Przemiana spoczynkowa:</b> ${fmt(t.bmr)} kcal (wzór Mifflina–St Jeora, wiek ${t.age}).</li>
-        <li><b>Zapotrzebowanie:</b> ${t.measuredActiveKcal != null
+        ${t.adaptive ? `<li><b>Zapotrzebowanie z Twoich danych:</b> średnio ${fmt(t.adaptive.avgIntake)} kcal zjedzone dziennie przez ${t.adaptive.span} dni, a trend wagi zmienił się o ${fmt(t.adaptive.changeKg, 2)} kg (× 7700 kcal/kg) = ${fmt(t.adaptive.tdee)} kcal. Ze wzoru wychodzi ${fmt(t.formulaTdee)} kcal.</li>` : ''}
+        <li><b>${t.adaptive ? 'Ze wzoru' : 'Zapotrzebowanie'}:</b> ${t.measuredActiveKcal != null
           ? `${fmt(t.bmr)} + średnio ${fmt(t.measuredActiveKcal)} kcal aktywności z ostatnich 30 dni (Zdrowie) + ok. 10% na trawienie = ${fmt(t.tdee)} kcal.`
           : `${fmt(t.bmr)} × współczynnik aktywności = ${fmt(t.tdee)} kcal.`}</li>
         ${t.goal !== 'maintenance' ? `<li><b>${t.goal === 'reduction' ? 'Deficyt' : 'Nadwyżka'}:</b> ${fmt(t.ratePct, 2)}% masy ciała na tydzień (${fmt(t.weeklyChangeKg, 2)} kg × 7700 kcal / 7 dni).${t.goal === 'reduction' ? ' Zalecane tempo redukcji to 0,5–1% tygodniowo.' : ''}</li>` : ''}
         <li><b>Białko:</b> ${esc(t.proteinBasis)}. Najlepiej w 3–5 porcjach po ok. ${t.perMealProtein} g.</li>
         <li><b>Tłuszcze:</b> 25% energii (zalecany zakres 20–35%), nie mniej niż 0,6 g/kg.</li>
         <li><b>Węglowodany:</b> reszta energii; paliwo do treningów.</li>
-        <li>To punkt startowy. Jeśli przez 2–3 tygodnie waga zmienia się wolniej lub szybciej niż zakładane tempo, skoryguj kalorie o 100–200.</li>
+        <li>Wzór to punkt startowy. Gdy przez ${ADAPTIVE_MIN_DAYS}+ dni ważysz się i wpisujesz posiłki, aplikacja może liczyć zapotrzebowanie z Twoich danych i sama korygować cel.</li>
       </ul>
       <div class="sources">
         <div class="small muted" style="margin-bottom:6px">Źródła</div>
@@ -462,21 +520,29 @@ function viewNutrition() {
         <ul>${s.items.map((i) => `<li>${esc(i)}</li>`).join('')}</ul>
       </details>`).join('')}
   `, { back: '#/diet' });
+  document.getElementById('tdee-mode')?.addEventListener('click', async () => {
+    data.profile.tdeeMode = data.profile.tdeeMode === 'adaptive' ? 'formula' : 'adaptive';
+    await save();
+    route();
+  });
 }
 
-function sparkline(points, unit) {
+// Line chart; with `trend` the raw points become dots and the trend is the line.
+function sparkline(points, unit, { trend = null } = {}) {
   if (points.length < 2) return '<p class="small">Za mało pomiarów na wykres.</p>';
   const w = 320, h = 120, pad = 18;
   const xs = points.map((p) => new Date(p.date).getTime());
-  const ys = points.map((p) => p.value);
+  const all = [...points.map((p) => p.value), ...(trend ?? []).map((p) => p.value)];
   const [x0, x1] = [Math.min(...xs), Math.max(...xs)];
-  const [y0, y1] = [Math.min(...ys) - 1, Math.max(...ys) + 1];
+  const [y0, y1] = [Math.min(...all) - 1, Math.max(...all) + 1];
   const X = (x) => pad + (x - x0) / (x1 - x0 || 1) * (w - 2 * pad);
   const Y = (y) => h - pad - (y - y0) / (y1 - y0 || 1) * (h - 2 * pad);
-  const d = points.map((p, i) => `${i ? 'L' : 'M'}${X(xs[i]).toFixed(1)},${Y(p.value).toFixed(1)}`).join(' ');
+  const line = trend ?? points;
+  const d = line.map((p, i) => `${i ? 'L' : 'M'}${X(new Date(p.date).getTime()).toFixed(1)},${Y(p.value).toFixed(1)}`).join(' ');
   const area = `${d} L${X(x1)},${h - pad} L${X(x0)},${h - pad} Z`;
+  const dots = trend ? points.map((p, i) => `<circle cx="${X(xs[i]).toFixed(1)}" cy="${Y(p.value).toFixed(1)}" r="1.8"/>`).join('') : '';
   return `<svg class="spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" role="img" aria-label="Wykres">
-    <path class="area" d="${area}"/><path class="line" d="${d}"/>
+    <path class="area" d="${area}"/>${dots}<path class="line" d="${d}"/>
     <text x="${pad}" y="${h - 2}">${dateLabel(points[0].date)}</text>
     <text x="${w - pad}" y="${h - 2}" text-anchor="end">${dateLabel(points.at(-1).date)}</text>
     <text x="${pad}" y="12">${fmt(y1 - 1, 1)} ${unit}</text>
@@ -485,7 +551,9 @@ function sparkline(points, unit) {
 
 function viewProgress() {
   const cutoff = new Date(Date.now() - 365 * 864e5).toISOString().slice(0, 10);
-  const weights = (data.bodyMeasurements ?? []).filter((m) => m.weightKg && m.date >= cutoff).map((m) => ({ date: m.date, value: m.weightKg }));
+  const trend = weightTrend(weightPoints());
+  const recent = trend.filter((p) => p.date >= cutoff);
+  const rate = trendRate(trend);
   const lastBody = (data.bodyMeasurements ?? []).at(-1);
   const best = new Map();
   for (const m of data.oneRepMaxes ?? []) {
@@ -494,9 +562,11 @@ function viewProgress() {
   }
   render('Postępy', `
     <div class="card">
-      <p>Waga · ostatnie 12 miesięcy</p>
-      <h2>${fmt(lastBody?.weightKg, 1)} kg${lastBody?.bodyFatPct ? ` <span class="muted" style="font-size:15px;font-weight:500">· ${fmt(lastBody.bodyFatPct, 1)}% tłuszczu</span>` : ''}</h2>
-      ${sparkline(weights, 'kg')}
+      <p>Waga · trend z 12 miesięcy</p>
+      <h2>${fmt(trend.at(-1)?.trend, 1)} kg${lastBody?.bodyFatPct ? ` <span class="muted" style="font-size:15px;font-weight:500">· ${fmt(lastBody.bodyFatPct, 1)}% tłuszczu</span>` : ''}</h2>
+      <p class="small">${rate != null ? `${rate > 0 ? '+' : rate < 0 ? '−' : ''}${fmt(Math.abs(rate), 2)} kg/tydzień (ostatnie 3 tygodnie)` : 'Tempo pokaże się po tygodniu pomiarów.'}${lastBody?.weightKg ? ` · ostatni pomiar ${fmt(lastBody.weightKg, 1)} kg` : ''}</p>
+      ${sparkline(recent, 'kg', { trend: recent.map((p) => ({ date: p.date, value: p.trend })) })}
+      <p class="small muted" style="margin-top:6px">Kropki to pomiary, linia to średnia wygładzona. Dzienne wahania o 1–2 kg to głównie woda.</p>
     </div>
     <a class="card" href="#/steps" style="display:block;color:inherit;text-decoration:none">
       <p>Kroki · ostatnie 14 dni</p>
@@ -505,12 +575,13 @@ function viewProgress() {
     <div class="section-title">Rekordy 1RM</div>
     <div class="list">
       ${[...best.values()].map((m) => `
-        <div class="row">
+        <a class="row" href="#/exercise/${encodeURIComponent(m.exerciseId)}">
           ${icon('trophy', 'icon-sm')}
           <div class="grow"><div class="title">${esc(exName(m.exerciseId))}</div>
           <div class="sub">${m.date ? dateLabel(m.date) : 'data nieznana'}${m.reps > 1 ? ` · ${m.weightKg} kg × ${m.reps}` : ''}</div></div>
           <b>${fmt(m.estimated1RM ?? m.weightKg, 1)} kg</b>
-        </div>`).join('')}
+          <span class="chev">${icon('chevron-right', 'icon-sm')}</span>
+        </a>`).join('')}
     </div>
     <div class="section-title">Historia treningów</div>
     ${(data.workoutLogs ?? []).length ? `<div class="list">
@@ -624,12 +695,17 @@ function newDraft(program, week, session) {
     sessionKey: sessionKey(program.id, week.number, session.order),
     title: `${program.name} · tydz. ${week.number} · ${sessionTitle(session)}`,
     startedAt: Date.now(),
-    entries: main.map((it) => ({
-      exerciseId: it.exerciseId,
-      restSec: it.restSec ?? 90,
-      plan: itemChips(it),
-      sets: Array.from({ length: it.sets ?? 1 }, () => ({ kg: suggestedKg(it), reps: defaultReps(it), done: false })),
-    })),
+    entries: main.map((it) => {
+      const prev = previousSets(it.exerciseId)?.sets ?? [];
+      return {
+        exerciseId: it.exerciseId,
+        restSec: it.restSec ?? 90,
+        plan: itemChips(it),
+        sets: Array.from({ length: it.sets ?? 1 }, (_, i) => ({
+          kg: suggestedKg(it) ?? (prev[i] ?? prev.at(-1))?.kg ?? null, reps: defaultReps(it), done: false,
+        })),
+      };
+    }),
   };
 }
 
@@ -651,9 +727,14 @@ async function viewLog(programId, number, order) {
     await db.set('draft', draft);
   }
 
+  const prevByEntry = draft.entries.map((en) => previousSets(en.exerciseId)?.sets ?? []);
+  const prevLabel = (e, i) => {
+    const p = prevByEntry[e][i];
+    return p ? `<span class="prev">${p.kg ? `${fmt(p.kg, 2)}×${p.reps ?? '?'}` : `${p.reps ?? '?'} powt.`}</span>` : '';
+  };
   const setRow = (e, i, set) => `
     <div class="set-row ${set.done ? 'done' : ''}">
-      <span class="set-no">${i + 1}</span>
+      <span class="set-no">${i + 1}${prevLabel(e, i)}</span>
       <label><input type="text" inputmode="decimal" data-e="${e}" data-s="${i}" data-f="kg" value="${set.kg ?? ''}" placeholder="kg"><span>kg</span></label>
       <label><input type="text" inputmode="numeric" data-e="${e}" data-s="${i}" data-f="reps" value="${set.reps ?? ''}" placeholder="powt."><span>powt.</span></label>
       <button type="button" class="check" data-done="${e}/${i}" aria-label="Seria wykonana">${icon('check', 'icon-sm')}</button>
@@ -666,6 +747,7 @@ async function viewLog(programId, number, order) {
         <div class="name">${esc(exName(en.exerciseId))}</div>
         ${exInfo(en.exerciseId).desc ? `<div class="desc clamp">${esc(exInfo(en.exerciseId).desc)}</div>` : ''}
         ${en.plan ? `<div class="meta">${en.plan}</div>` : ''}
+        ${prevByEntry[e].length ? `<div class="small muted prev-hint">Pod numerem serii: wynik z ${dateLabel(previousSets(en.exerciseId).date)}</div>` : ''}
         <div class="sets" id="sets-${e}">${en.sets.map((set, i) => setRow(e, i, set)).join('')}</div>
         <button type="button" class="link-btn" data-add="${e}">${icon('plus', 'icon-sm')} Dodaj serię</button>
       </div>`).join('')}
@@ -731,8 +813,9 @@ async function viewLog(programId, number, order) {
         .map((s) => ({ ...s, e1rm: estimate1RM(s.kg, s.reps) }))
         .sort((a, b) => b.e1rm - a.e1rm)[0];
       const prev = current1RM(en.exerciseId);
-      // Only lifts that already have a 1RM on record are tracked as records.
-      if (best && prev && best.e1rm > prev) {
+      // A 1RM makes sense for strength lifts, not for throws, jumps or conditioning.
+      const strength = !NO_1RM_CATEGORIES.has(exInfo(en.exerciseId).cat);
+      if (best && strength && (!prev || best.e1rm > prev)) {
         data.oneRepMaxes.push({
           exerciseId: en.exerciseId, date: log.date, weightKg: best.kg, reps: best.reps,
           estimated1RM: Math.round(best.e1rm * 10) / 10, source: 'trening',
@@ -990,15 +1073,60 @@ function viewExercises() {
   };
 }
 
+// Best estimated 1RM per day from logged workouts and recorded maxes.
+function exerciseHistory(id) {
+  const byDate = new Map();
+  const put = (date, value) => { if (date && value > (byDate.get(date) ?? 0)) byDate.set(date, value); };
+  for (const l of data.workoutLogs ?? []) {
+    for (const en of l.entries) {
+      if (en.exerciseId !== id) continue;
+      for (const st of en.sets) if (st.kg > 0 && st.reps > 0 && st.reps <= 10) put(l.date, estimate1RM(st.kg, st.reps));
+    }
+  }
+  for (const m of data.oneRepMaxes ?? []) if (m.exerciseId === id) put(m.date, m.estimated1RM ?? m.weightKg);
+  return [...byDate].sort(([a], [b]) => a.localeCompare(b)).map(([date, value]) => ({ date, value: Math.round(value * 10) / 10 }));
+}
+
+function exerciseProgress(id, best) {
+  const points = exerciseHistory(id);
+  const logs = (data.workoutLogs ?? []).filter((l) => l.entries.some((e) => e.exerciseId === id)).slice(-5).reverse();
+  const sets = (data.workoutLogs ?? []).flatMap((l) => l.entries.filter((e) => e.exerciseId === id).flatMap((e) => e.sets));
+  const heaviest = sets.reduce((a, b) => ((b.kg ?? 0) > (a?.kg ?? 0) ? b : a), null);
+  const mostReps = sets.reduce((a, b) => ((b.reps ?? 0) > (a?.reps ?? 0) ? b : a), null);
+  return `
+    <div class="card">
+      <p>Szacowany 1RM</p>
+      <h2>${best ? `${fmt(best, 1)} kg` : '–'}</h2>
+      ${points.length >= 2 ? sparkline(points, 'kg') : '<p class="small">Wykres pojawi się po dwóch treningach z tym ćwiczeniem (serie do 10 powtórzeń).</p>'}
+      ${heaviest ? `<p class="small" style="margin-top:8px">Najcięższa seria: ${fmt(heaviest.kg, 2)} kg × ${heaviest.reps ?? '?'} · najwięcej powtórzeń: ${mostReps.reps}${mostReps.kg ? ` (${fmt(mostReps.kg, 2)} kg)` : ''}</p>` : ''}
+    </div>
+    ${logs.length ? `<div class="section-title">Ostatnie treningi</div><div class="list">
+      ${logs.map((l) => `<a class="row" href="#/history/${l.id}"><div class="grow"><div class="title">${dateLabel(l.date)}</div>
+        <div class="sub">${l.entries.filter((e) => e.exerciseId === id).flatMap((e) => e.sets).map((st) => `${st.kg ? `${fmt(st.kg, 2)}×` : ''}${st.reps ?? '?'}`).join(' · ')}</div></div>
+        <span class="chev">${icon('chevron-right', 'icon-sm')}</span></a>`).join('')}</div>` : ''}
+    <form id="set-1rm" class="card add-row" style="margin-top:12px">
+      <input name="kg" inputmode="decimal" placeholder="Ciężar, kg" aria-label="Ciężar w kg">
+      <input name="reps" inputmode="numeric" placeholder="Powt." aria-label="Powtórzenia" style="max-width:80px">
+      <button class="icon-btn accent" aria-label="Zapisz wynik">${icon('check')}</button>
+    </form>
+    <p class="muted small" style="margin:-4px 4px 16px">Wpisz wynik testu lub dobrą serię (do 10 powtórzeń). Plany z %1RM policzą z niego kilogramy.</p>
+    <div class="section-title">Opis</div>`;
+}
+
 function viewExercise(rawId) {
   const isNew = rawId === 'new';
   const id = decodeURIComponent(rawId);
   const ex = exerciseById.get(id);
+  if (!isNew && !ex && CATALOG[id]) {
+    // Exercise from a ready-made plan the user has not added yet: description only.
+    return render('Ćwiczenie', `<div class="card"><h2>${esc(CATALOG[id].name)}</h2><p style="color:var(--text);margin-top:8px">${esc(CATALOG[id].desc)}</p></div>`, { back: 'history' });
+  }
   if (!isNew && !ex) return viewExercises();
   const info = isNew ? { name: '', desc: '', cat: 'Nogi', original: '' } : exInfo(id);
   const uses = isNew ? 0 : exerciseUsage(id);
   const best = isNew ? null : current1RM(id);
-  render(isNew ? 'Nowe ćwiczenie' : 'Ćwiczenie', `
+  render(isNew ? 'Nowe ćwiczenie' : info.name, `
+    ${isNew ? '' : exerciseProgress(id, best)}
     <form id="ex-form">
       <div class="list form">
         <label class="row stacked"><span>Nazwa</span><input name="name" value="${esc(info.name)}" required></label>
@@ -1009,7 +1137,7 @@ function viewExercise(rawId) {
       <button class="btn" type="submit">${icon('check', 'icon-sm')} Zapisz</button>
     </form>
     ${!isNew ? `<button class="btn danger" id="delete-ex" style="margin-top:12px">${icon('trash-2', 'icon-sm')} Usuń ćwiczenie</button>` : ''}
-  `, { back: '#/exercises' });
+  `, { back: 'history' });
   document.getElementById('ex-form').onsubmit = async (ev) => {
     ev.preventDefault();
     const f = new FormData(ev.target);
@@ -1022,6 +1150,18 @@ function viewExercise(rawId) {
     await save();
     location.hash = '#/exercises';
   };
+  document.getElementById('set-1rm')?.addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    const kg = Number(ev.target.kg.value.replace(',', '.'));
+    const reps = Number(ev.target.reps.value) || 1;
+    if (!(kg > 0)) return;
+    data.oneRepMaxes.push({
+      exerciseId: id, date: todayIso(), weightKg: kg, reps,
+      estimated1RM: Math.round(estimate1RM(kg, reps) * 10) / 10, source: 'ręcznie',
+    });
+    await save();
+    route();
+  });
   document.getElementById('delete-ex')?.addEventListener('click', async () => {
     if (uses) {
       alert(`To ćwiczenie jest w planach ${uses} ${uses === 1 ? 'raz' : 'razy'}. Usuń je najpierw z treningów.`);
@@ -1191,20 +1331,47 @@ function viewFoodAdd(date, meal) {
       </div>
       <form class="card add-row" id="food-search">
         <input type="search" name="q" value="${esc(state.query)}" placeholder="${state.tab === 'mine' ? 'Filtruj moje produkty…' : 'Nazwa produktu lub kod kreskowy'}" autocomplete="off" enterkeyhint="search">
+        <button type="button" class="icon-btn" id="scan" aria-label="Skanuj kod kreskowy">${icon('scan-barcode')}</button>
         <button class="icon-btn accent" aria-label="Szukaj">${icon('chevron-right')}</button>
       </form>
       <div id="food-results">${body()}</div>
       <div class="actions">
         <a class="btn secondary" href="#/recipes/${date}/${meal}">Z przepisu</a>
-        <a class="btn secondary" href="#/food/new/${date}/${meal}">${icon('plus', 'icon-sm')} Własny produkt</a>
+        <a class="btn secondary" href="#/food/new/${date}/${meal}" id="custom-food">${icon('plus', 'icon-sm')} Własny produkt</a>
       </div>
       ${state.tab !== 'mine' ? `<p class="muted small" style="text-align:center;margin-top:16px">Dane: ${state.tab === 'off'
         ? '<a href="https://world.openfoodfacts.org" target="_blank" rel="noopener">Open Food Facts</a> (ODbL), wartości z etykiet wpisane przez użytkowników — sprawdź z opakowaniem.'
         : '<a href="https://fdc.nal.usda.gov" target="_blank" rel="noopener">USDA FoodData Central</a> (domena publiczna).'}</p>` : ''}
     `, { back: `#/diet/${date}` });
-    document.getElementById('food-search').onsubmit = async (ev) => {
+    document.getElementById('food-search').onsubmit = (ev) => {
       ev.preventDefault();
       state.query = new FormData(ev.target).get('q').trim();
+      search();
+    };
+    document.getElementById('custom-food').onclick = () => { pendingBarcode = state.pendingCode ?? null; };
+    document.getElementById('scan').onclick = async () => {
+      let code;
+      try {
+        code = await scanBarcode();
+      } catch (err) {
+        state.error = err.message;
+        return draw();
+      }
+      if (!code) return;
+      // A product scanned before is already in "Moje"; otherwise ask Open Food Facts.
+      const known = data.foods.find((f) => f.code === code);
+      if (known) {
+        location.hash = `#/entry/${date}/new-${meal}-${known.id}`;
+        return;
+      }
+      state.tab = 'off';
+      state.query = code;
+      search();
+    };
+    view.onclick = onclick;
+  };
+  const search = async () => {
+      state.pendingCode = null;
       if (state.tab === 'mine' || !state.query) return draw();
       state.loading = true; state.error = null; draw();
       try {
@@ -1218,9 +1385,11 @@ function viewFoodAdd(date, meal) {
         state.error = err.message.includes('fetch') ? 'Brak połączenia z bazą produktów.' : err.message;
       }
       state.loading = false;
+      if (state.tab === 'off' && /^\d{8,14}$/.test(state.query) && !state.results.length && !state.error) {
+        state.error = `Produktu z kodem ${state.query} nie ma jeszcze w Open Food Facts. Dodaj go jako własny produkt, a następnym razem skaner znajdzie go w „Moich”.`;
+        state.pendingCode = state.query;
+      }
       draw();
-    };
-    view.onclick = onclick;
   };
   const onclick = async (ev) => {
     const tab = ev.target.closest('[data-tab]');
@@ -1300,6 +1469,7 @@ function viewFood(idOrNew, date, meal) {
   const inUse = isNew ? 0 : Object.values(data.foodLog).flat().filter((e) => e.foodId === food.id).length;
   const input = (name, label, value, mode = 'decimal') => `<label class="row"><span class="grow">${label}</span><input name="${name}" inputmode="${mode}" value="${esc(value ?? '')}"></label>`;
   render(isNew ? 'Własny produkt' : 'Produkt', `
+    ${isNew && pendingBarcode ? `<p class="muted small" style="margin:0 4px 12px">Kod kreskowy ${esc(pendingBarcode)} zostanie zapisany z produktem.</p>` : ''}
     <form id="food-form">
       <div class="list form">
         <label class="row stacked"><span>Nazwa</span><input name="name" value="${esc(food.name)}" required></label>
@@ -1329,7 +1499,8 @@ function viewFood(idOrNew, date, meal) {
     if (!(per100.kcal >= 0) || per100.kcal == null) { alert('Podaj kalorie na 100 g.'); return; }
     const values = { name: String(f.get('name')).trim(), brand: String(f.get('brand')).trim() || null, per100, servingG: n('servingG') };
     if (isNew) {
-      const saved = saveFood({ source: 'custom', ...values });
+      const saved = saveFood({ source: 'custom', ...values, ...(pendingBarcode ? { code: pendingBarcode } : {}) });
+      pendingBarcode = null;
       await save();
       location.hash = date ? `#/entry/${date}/new-${meal}-${saved.id}` : '#/foods';
     } else {
@@ -1406,16 +1577,37 @@ function setDayValues(date, values) {
 const dayLog = (date) => (data.dailyLogs ?? []).find((l) => l.date === date);
 const stepsGoal = () => data.settings.stepsGoal ?? 8000;
 
-// Parses text copied by the iOS Shortcut, e.g. "kroki=8 512 kcal=430,5".
-
+// Parses text copied by the iOS Shortcut, e.g. "kroki=8 512 kcal=430,5 sen=7,2 tetno=58 waga=87,6 tluszcz=27".
+// Every key is optional; numbers may use a comma and spaces as in Polish formatting.
 function parseHealthText(text) {
-  const grab = (key) => {
+  const grab = (key, digits = 0) => {
     const m = text.match(new RegExp(`(?:${key})\\s*[=:]\\s*([\\d\\s\\u00a0.,]+)`, 'i'));
     if (!m) return null;
-    const v = Number(m[1].replace(/[\s ]/g, '').replace(',', '.'));
-    return Number.isFinite(v) ? Math.round(v) : null;
+    const v = Number(m[1].replace(/[\s\u00a0]/g, '').replace(',', '.'));
+    return Number.isFinite(v) && v > 0 ? Math.round(v * 10 ** digits) / 10 ** digits : null;
   };
-  return { steps: grab('kroki|steps'), activeKcal: grab('kcal|energia') };
+  const sleepH = grab('sen|sleep', 2);
+  return {
+    steps: grab('kroki|steps'),
+    activeKcal: grab('kcal|energia'),
+    sleepMin: sleepH != null ? Math.round(sleepH * 60) : null,
+    restingHr: grab('tetno|tętno|hr'),
+    weightKg: grab('waga|weight', 1),
+    bodyFatPct: grab('tluszcz|tłuszcz|fat', 1),
+  };
+}
+
+// Applies values from the Shortcut: daily totals go to the day log, weight to measurements.
+function applyHealthValues(date, values) {
+  const { weightKg, bodyFatPct, ...day } = values;
+  setDayValues(date, Object.fromEntries(Object.entries(day).filter(([, v]) => v != null)));
+  if (weightKg) {
+    data.bodyMeasurements = (data.bodyMeasurements ?? []).filter((m) => m.date !== date);
+    data.bodyMeasurements.push({ date, weightKg, ...(bodyFatPct ? { bodyFatPct } : {}) });
+    data.bodyMeasurements.sort((a, b) => a.date.localeCompare(b.date));
+    data.profile.weightKg = weightKg;
+    if (bodyFatPct) data.profile.bodyFatPct = bodyFatPct;
+  }
 }
 
 function stepBars(days) {
@@ -1451,6 +1643,7 @@ function viewSteps() {
       ${stepBars(14)}
     </div>
     <button class="btn" id="paste-health">${icon('download', 'icon-sm')} Wklej ze Skrótu</button>
+    <p class="muted small" style="margin:8px 4px 0">Skrót może przenieść kroki, aktywne kcal, sen, tętno spoczynkowe i wagę.</p>
     <form id="steps-form" style="margin-top:16px">
       <div class="list form">
         <label class="row"><span class="grow">Kroki dziś</span><input name="steps" inputmode="numeric" value="${log?.steps ?? ''}" placeholder="np. 8500"></label>
@@ -1464,10 +1657,11 @@ function viewSteps() {
       <ul class="explain">
         <li>Aplikacja w przeglądarce nie ma bezpośredniego dostępu do Zdrowia (Apple daje go tylko aplikacjom z App Store). Pomostem jest darmowa aplikacja <b>Skróty</b>.</li>
         <li>W Skrótach utwórz nowy skrót „Zdrowie → Progress”.</li>
-        <li>Dodaj akcję <b>Znajdź próbki zdrowia</b>: typ <i>Kroki</i>, data początkowa <i>jest dzisiaj</i>. Potem <b>Oblicz statystyki</b> → <i>Suma</i>.</li>
-        <li>Powtórz dla typu <i>Energia aktywna</i> (opcjonalnie).</li>
-        <li>Dodaj akcję <b>Tekst</b>: <code>kroki=[Suma kroków] kcal=[Suma energii]</code>, a za nią <b>Kopiuj do schowka</b>.</li>
-        <li>Uruchom skrót (np. z widżetu albo przez stuknięcie w tył telefonu), otwórz Progress i stuknij „Wklej ze Skrótu”.</li>
+        <li><b>Kroki:</b> akcja <b>Znajdź próbki zdrowia</b>, typ <i>Kroki</i>, data początkowa <i>jest dzisiaj</i>, a potem <b>Oblicz statystyki</b> → <i>Suma</i>. Tak samo dla <i>Energia aktywna</i>.</li>
+        <li><b>Waga i tkanka tłuszczowa</b> (np. z wagi Bluetooth): <b>Znajdź próbki zdrowia</b>, typ <i>Masa ciała</i>, sortuj <i>od najnowszych</i>, limit <i>1</i>. Tak samo dla <i>Procent tkanki tłuszczowej</i> i <i>Tętno spoczynkowe</i>.</li>
+        <li><b>Sen:</b> typ <i>Sen</i> (analiza snu) od wczoraj 18:00, potem <b>Oblicz statystyki</b> → <i>Suma</i> i zamień na godziny.</li>
+        <li>Na końcu akcja <b>Tekst</b>: <code>kroki=… kcal=… waga=… tluszcz=… tetno=… sen=…</code> (wstaw zmienne z kroków powyżej; każdą część możesz pominąć) i <b>Kopiuj do schowka</b>.</li>
+        <li>Uruchom skrót (np. z widżetu, przez stuknięcie w tył telefonu albo automatycznie wieczorem w <b>Automatyzacji</b>), otwórz Progress i stuknij „Wklej ze Skrótu”. Treningi z Apple Watch liczą się w aktywnych kcal.</li>
         <li>Aktywne kcal z ostatnich 30 dni poprawiają też wyliczenie zapotrzebowania w Diecie. W wersji natywnej (App Store) synchronizacja będzie automatyczna.</li>
       </ul>
     </details>
@@ -1493,50 +1687,73 @@ function viewSteps() {
       text = prompt('Wklej tekst ze Skrótu (np. kroki=8500 kcal=420)');
     }
     const values = parseHealthText(text ?? '');
-    if (values.steps == null && values.activeKcal == null) {
+    if (Object.values(values).every((v) => v == null)) {
       alert('W schowku nie ma danych ze Skrótu. Najpierw uruchom skrót „Zdrowie → Progress”.');
       return;
     }
-    setDayValues(today, Object.fromEntries(Object.entries(values).filter(([, v]) => v != null)));
+    applyHealthValues(today, values);
     await save();
+    const got = [values.steps != null && 'kroki', values.activeKcal != null && 'kcal', values.sleepMin != null && 'sen', values.restingHr != null && 'tętno', values.weightKg && 'waga'].filter(Boolean);
+    alert(`Zapisano: ${got.join(', ')}.`);
     route();
   };
 }
 
 function viewTemplates() {
-  render('Gotowe plany', `
-    <p class="muted small" style="margin:0 4px 12px">Plan zostanie skopiowany do Twoich kategorii na 4 tygodnie. Potem możesz w nim zmieniać ćwiczenia, serie i ciężary.</p>
-    ${Object.entries(PLACES).map(([place, label]) => `
-    <div class="section-title">${label}</div>
-    <div class="list">
-      ${TEMPLATES.filter((t) => t.place === place).map((t) => `<a class="row" href="#/template/${t.id}">
-        <div class="grow"><div class="title">${esc(t.name)}</div>
-        <div class="sub">${t.perWeek}× w tygodniu · ${esc(t.level)} · ${esc(t.equipment)}</div></div>
-        <span class="chev">${icon('chevron-right', 'icon-sm')}</span></a>`).join('')}
-    </div>`).join('')}
-  `, { back: '#/plans' });
+  let audience = data.settings.templateAudience ?? 'all';
+  const row = (t) => `<a class="row" href="#/template/${t.id}">
+    <div class="grow"><div class="title">${esc(t.name)}${t.audience !== 'all' && audience === 'all' ? ` <span class="badge">${t.audience === 'women' ? 'K' : 'M'}</span>` : ''}</div>
+    <div class="sub">${t.weeks ? `${t.weeks.length} tyg. · ` : ''}${t.perWeek}× w tygodniu · ${esc(t.level)} · ${esc(t.equipment)}</div></div>
+    <span class="chev">${icon('chevron-right', 'icon-sm')}</span></a>`;
+  const group = (label, list, note = '') => list.length ? `<div class="section-title">${label}</div>${note}<div class="list">${list.map(row).join('')}</div>` : '';
+  const draw = () => {
+    const list = TEMPLATES.filter((t) => forAudience(t, audience));
+    render('Plany', `
+      ${plansSwitch('ready')}
+      <div class="segmented">
+        ${Object.entries(AUDIENCES).map(([k, l]) => `<a href="#" data-audience="${k}" class="${audience === k ? 'active' : ''}">${l}</a>`).join('')}
+      </div>
+      ${Object.entries(PLACES).map(([place, label]) => group(label, list.filter((t) => t.place === place && !t.source))).join('')}
+      ${group('Z rocznego cyklu z trenerem', list.filter((t) => t.source === 'coach'),
+        '<p class="muted small" style="margin:0 4px 8px">Prawdziwe bloki treningowe rozpisane przez trenera, z periodyzacją i %1RM. Bez ciężarów i wyników, kilogramy policzą się z Twojego 1RM.</p>')}
+      <p class="muted small" style="margin:12px 4px">Zasady treningu są takie same dla kobiet i mężczyzn. Plany różnią się akcentami: więcej pośladków i nóg albo więcej góry ciała. Każdy plan możesz po skopiowaniu zmieniać.</p>
+    `);
+    view.onclick = (ev) => {
+      const a = ev.target.closest('[data-audience]');
+      if (!a) return;
+      ev.preventDefault();
+      audience = a.dataset.audience;
+      data.settings.templateAudience = audience;
+      save();
+      draw();
+    };
+  };
+  draw();
 }
 
 function viewTemplate(id) {
   const t = TEMPLATES.find((x) => x.id === id);
   if (!t) return viewTemplates();
+  const weeks = t.weeks?.length ?? 4;
   render(t.name, `
     <div class="card">
-      <p>${t.perWeek}× w tygodniu · ${esc(t.level)} · ${esc(t.equipment)}</p>
+      <p>${weeks} tyg. · ${t.perWeek}× w tygodniu · ${esc(t.level)} · ${esc(t.equipment)}</p>
       <p style="color:var(--text);margin-top:8px">${esc(t.desc)}</p>
       <p class="small" style="margin-top:8px"><b>Progresja:</b> ${esc(t.progression)}</p>
     </div>
-    ${t.sessions.map((s) => `
-      <div class="section-title">${esc(s.name)}</div>
+    ${templatePreview(t).map((s) => `
+      <div class="section-title">${esc(s.name)}${t.weeks ? ' · tydzień 1' : ''}</div>
       <div class="list">
-        ${s.main.map(([exId, sets, reps]) => `<a class="row" href="#/exercise/${exId}">
-          <div class="grow"><div class="title">${esc(CATALOG[exId]?.name ?? exId)}</div>
-          <div class="sub clamp">${esc(CATALOG[exId]?.desc ?? '')}</div></div>
-          <b class="nowrap">${sets} × ${esc(reps)}</b></a>`).join('')}
+        ${s.items.map((it) => `<a class="row" href="#/exercise/${encodeURIComponent(it.exerciseId)}">
+          <div class="grow"><div class="title">${esc(CATALOG[it.exerciseId]?.name ?? it.exerciseId)}</div>
+          <div class="sub clamp">${[it.percent1RM ? `${Math.round(it.percent1RM * 100)}% 1RM` : '', it.rir != null ? `RIR ${it.rir}` : '', it.tempo ? `tempo ${esc(it.tempo)}` : ''].filter(Boolean).join(' · ') || esc(CATALOG[it.exerciseId]?.desc ?? '')}</div></div>
+          <b class="nowrap">${it.sets ?? 1} × ${esc(it.reps ?? it.repsText ?? '')}</b></a>`).join('')}
       </div>`).join('')}
-    <p class="muted small" style="margin:12px 4px">${t.noRir
-      ? (t.weekSessions ? 'Pokazany jest 1. tydzień; w kolejnych odcinki biegu się wydłużają.' : 'Ćwiczenia wykonuj spokojnie, w zakresie bez bólu.')
-      : 'Każdy trening ma też krótką rozgrzewkę i wyciszenie. RIR = ile powtórzeń zostawiasz w zapasie; plan zaczyna od RIR 3 i schodzi do 1 w 4. tygodniu.'}</p>
+    <p class="muted small" style="margin:12px 4px">${t.weeks
+      ? `Plan ma ${weeks} tygodni; ćwiczenia i obciążenia zmieniają się z tygodnia na tydzień. Każdy trening ma rozgrzewkę i wyciszenie.`
+      : t.noRir
+        ? (t.weekSessions ? 'Pokazany jest 1. tydzień; w kolejnych odcinki biegu się wydłużają.' : 'Ćwiczenia wykonuj spokojnie, w zakresie bez bólu.')
+        : 'Każdy trening ma też krótką rozgrzewkę i wyciszenie. RIR = ile powtórzeń zostawiasz w zapasie; plan zaczyna od RIR 3 i schodzi do 1 w 4. tygodniu.'}</p>
     <button class="btn" id="use-template">${icon('plus', 'icon-sm')} Dodaj do moich planów</button>
   `, { back: '#/templates' });
   document.getElementById('use-template').onclick = async () => {
@@ -1551,7 +1768,6 @@ function viewTemplate(id) {
     data.programs.push(program);
     data.settings.currentProgram = program.id;
     data.settings.currentWeek = 1;
-    data.settings.plansTab = program.id;
     await save();
     location.hash = `#/plans/${program.id}`;
   };
@@ -1642,7 +1858,7 @@ function viewRecipe(id, date, meal) {
 const ROUTES = [
   [/^#\/today$/, viewToday, 'today'],
   [/^#\/plans$/, () => viewPlans(), 'plans'],
-  [/^#\/plans\/([^/]+)$/, viewPlans, 'plans'],
+  [/^#\/plans\/([^/]+)$/, viewProgram, 'plans'],
   [/^#\/week\/([^/]+)\/(\d+)$/, viewWeek, 'plans'],
   [/^#\/session\/([^/]+)\/(\d+)\/(\d+)$/, viewSession, 'plans'],
   [/^#\/edit\/([^/]+)\/(\d+)\/(\d+)$/, viewEdit, 'plans'],

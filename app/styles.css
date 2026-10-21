@@ -298,3 +298,18 @@ ol.steps { padding-left: 34px; line-height: 1.5; }
 ol.steps li + li { margin-top: 6px; }
 .nowrap { white-space: nowrap; }
 code { font-size: 13px; background: var(--bg); padding: 1px 5px; border-radius: 5px; }
+
+/* Previous result under the set number in the workout logger */
+.set-no { display: flex; flex-direction: column; align-items: center; line-height: 1.1; }
+.set-no .prev { font-size: 10px; font-weight: 500; color: var(--muted); white-space: nowrap; margin-top: 2px; }
+.set-row { grid-template-columns: 44px 1fr 1fr 48px; }
+.prev-hint { margin: -2px 0 8px; }
+.spark circle { fill: var(--muted); opacity: .6; }
+
+/* Barcode scanner overlay */
+.scanner { position: fixed; inset: 0; z-index: 100; background: #000; display: flex; align-items: center; justify-content: center; }
+.scanner video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.scanner-frame { position: relative; width: min(78vw, 320px); height: 160px; border: 3px solid #fff; border-radius: 16px; box-shadow: 0 0 0 100vmax rgba(0, 0, 0, .45); }
+.scanner-hint { position: absolute; bottom: calc(48px + env(safe-area-inset-bottom)); left: 0; right: 0; text-align: center; color: #fff; font-weight: 600; }
+.scanner-close { position: absolute; top: calc(16px + env(safe-area-inset-top)); right: 16px; width: 44px; height: 44px; border-radius: 22px; border: 0; background: rgba(0, 0, 0, .5); color: #fff; display: grid; place-items: center; }
+.scanner-close .icon { width: 24px; height: 24px; }

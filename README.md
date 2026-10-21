@@ -16,6 +16,7 @@ npx http-server app -p 8080
 Instalacja na iPhonie: otwórz adres aplikacji w Safari → Udostępnij → „Do ekranu początkowego”, potem w aplikacji wybierz plik `seed.json`.
 
 Ikony interfejsu: [Lucide](https://lucide.dev) (licencja ISC, `app/vendor/lucide/LICENSE`). Ikona aplikacji jest własna (`app/icons/icon.svg`).
+Skaner kodów kreskowych: [ZXing](https://github.com/zxing-js/library) 0.21.3 (licencja Apache 2.0, `app/vendor/zxing/LICENSE`), wczytywany dopiero po stuknięciu „Skanuj”.
 
 ## Import danych z arkusza
 

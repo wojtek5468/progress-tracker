@@ -2,6 +2,10 @@
 // Rep ranges, sets and RIR follow common beginner/intermediate guidelines
 // (ACSM 2009 progression models; Schoenfeld 2016/2017 on weekly volume and frequency).
 // Every exercise id must exist in exercise-catalog.js.
+// `audience` only sets the default filter: the same training principles apply to everyone,
+// the women/men plans differ in emphasis (more glutes and legs, or more upper body).
+
+import { COACH_TEMPLATES } from './plan-templates-coach.js';
 
 const WARMUP = ['skakanka', 'marsz-wymachy-prostmi-nogiami', 'wykrok-i-globalny-wyprost', 'skretosklony'];
 const COOLDOWN = ['sklon-japonski-cobra', '15-oddechow-torem-brzusznym'];
@@ -15,10 +19,11 @@ const RUN_COOLDOWN = ['brisk-walk', '4-strech'];
 const RUN_WEEKS = [[8, '1 min bieg / 1,5 min marsz'], [6, '2 min bieg / 1,5 min marsz'], [5, '3 min bieg / 1,5 min marsz'], [4, '5 min bieg / 2 min marsz']];
 const run = (week, name) => s(name, [['run-easy', RUN_WEEKS[week][0], RUN_WEEKS[week][1], 0]], { warmup: RUN_WARMUP, cooldown: RUN_COOLDOWN });
 
-export const TEMPLATES = [
+const BASIC = [
   {
     id: 'fbw-3',
     place: 'gym',
+    audience: 'all',
     name: 'FBW – całe ciało 3×',
     level: 'Początkujący',
     equipment: 'Siłownia',
@@ -34,6 +39,7 @@ export const TEMPLATES = [
   {
     id: 'sila-5x5',
     place: 'gym',
+    audience: 'men',
     name: 'Siła 5×5',
     level: 'Początkujący',
     equipment: 'Siłownia (sztanga)',
@@ -49,6 +55,7 @@ export const TEMPLATES = [
   {
     id: 'gora-dol-4',
     place: 'gym',
+    audience: 'men',
     name: 'Góra / Dół 4×',
     level: 'Średniozaawansowany',
     equipment: 'Siłownia',
@@ -65,6 +72,7 @@ export const TEMPLATES = [
   {
     id: 'ppl-3',
     place: 'gym',
+    audience: 'men',
     name: 'Push / Pull / Nogi',
     level: 'Średniozaawansowany',
     equipment: 'Siłownia',
@@ -80,6 +88,7 @@ export const TEMPLATES = [
   {
     id: 'dom-3',
     place: 'home',
+    audience: 'all',
     name: 'Dom – bez sprzętu',
     level: 'Początkujący',
     equipment: 'Bez sprzętu (krzesło)',
@@ -95,6 +104,7 @@ export const TEMPLATES = [
   {
     id: 'posladki-nogi-3',
     place: 'gym',
+    audience: 'women',
     name: 'Pośladki i nogi + góra',
     level: 'Początkujący / średni',
     equipment: 'Siłownia',
@@ -110,6 +120,7 @@ export const TEMPLATES = [
   {
     id: 'fbw-2',
     place: 'gym',
+    audience: 'all',
     name: 'FBW 2× – dla zabieganych',
     level: 'Każdy poziom',
     equipment: 'Siłownia',
@@ -124,6 +135,7 @@ export const TEMPLATES = [
   {
     id: 'hybryda-3',
     place: 'gym',
+    audience: 'all',
     name: 'Siła + kondycja',
     level: 'Średniozaawansowany',
     equipment: 'Siłownia',
@@ -139,6 +151,7 @@ export const TEMPLATES = [
   {
     id: 'hantle-dom-3',
     place: 'home',
+    audience: 'all',
     name: 'Hantle w domu',
     level: 'Początkujący / średni',
     equipment: 'Para hantli (najlepiej regulowanych)',
@@ -154,6 +167,7 @@ export const TEMPLATES = [
   {
     id: 'kettlebell-3',
     place: 'home',
+    audience: 'all',
     name: 'Kettlebell',
     level: 'Początkujący / średni',
     equipment: 'Jeden kettlebell (12–24 kg)',
@@ -169,6 +183,7 @@ export const TEMPLATES = [
   {
     id: 'kalistenika-3',
     place: 'home',
+    audience: 'all',
     name: 'Kalistenika',
     level: 'Średniozaawansowany',
     equipment: 'Drążek i poręcze (np. plac street workout)',
@@ -184,6 +199,7 @@ export const TEMPLATES = [
   {
     id: 'bieganie-od-zera',
     place: 'cardio',
+    audience: 'all',
     name: 'Bieganie od zera',
     level: 'Początkujący',
     equipment: 'Buty do biegania',
@@ -197,6 +213,7 @@ export const TEMPLATES = [
   {
     id: 'mobilnosc-3',
     place: 'cardio',
+    audience: 'all',
     name: 'Mobilność i zdrowe plecy',
     level: 'Każdy poziom',
     equipment: 'Mata',
@@ -212,12 +229,169 @@ export const TEMPLATES = [
   },
 ];
 
+// Plans with a women's or men's emphasis.
+const GLUTE_WARMUP = ['marsz-wymachy-prostmi-nogiami', 'glute-bridge', 'triangle-band-walk', 'wykrok-i-globalny-wyprost'];
+const EXTRA = [
+  {
+    id: 'kobiety-start-3',
+    place: 'gym',
+    audience: 'women',
+    name: 'Start na siłowni',
+    level: 'Początkujący',
+    equipment: 'Siłownia (maszyny, hantle)',
+    perWeek: 3,
+    desc: 'Pierwsze 4 tygodnie na siłowni: całe ciało w każdym treningu, więcej pracy na nogi i pośladki, maszyny i hantle zamiast ciężkiej sztangi. Ok. 45 min.',
+    progression: 'Gdy we wszystkich seriach zrobisz górny zakres powtórzeń, dodaj najmniejszy możliwy ciężar.',
+    sessions: [
+      s('Całe ciało A', [['goblet-sq', 3, '10-12', 90], ['hip-thrust', 3, '10-12', 90], ['lat-pull-down', 3, '10-12', 90], ['incline-bench-press-db', 2, '10-12', 90], ['dead-bug-band', 2, '8/strona', 45]], { warmup: GLUTE_WARMUP }),
+      s('Całe ciało B', [['leg-press', 3, '10-12', 90], ['db-rdl', 3, '10-12', 90], ['row-cable', 3, '10-12', 90], ['db-ohp', 2, '10-12', 90], ['plank', 3, '30s', 45]], { warmup: GLUTE_WARMUP }),
+      s('Całe ciało C', [['reverse-lunge', 3, '10/noga', 90], ['glute-bridge', 3, '15', 60], ['inverted-row', 3, '8-10', 90], ['push-up', 3, '6-10', 90], ['abductor-machine-3s-pause', 2, '15', 45]], { warmup: GLUTE_WARMUP }),
+    ],
+  },
+  {
+    id: 'kobiety-sylwetka-4',
+    place: 'gym',
+    audience: 'women',
+    name: 'Sylwetka: dół / góra 4×',
+    level: 'Średniozaawansowany',
+    equipment: 'Siłownia',
+    perWeek: 4,
+    desc: 'Dwa dni nóg i pośladków (jeden z akcentem na pośladki i tył uda, drugi na uda) i dwa dni góry ciała. Najwięcej objętości na pośladki, czyli tam, gdzie zależy większości kobiet.',
+    progression: 'Podwójna progresja: dobijaj powtórzenia do górnej granicy, potem dodaj ciężar. W hip thruście ciężar może rosnąć szybko.',
+    sessions: [
+      s('Dół: pośladki', [['hip-thrust', 4, '8-10', 120], ['rdl', 3, '8-10', 120], ['bulgarian-sq', 3, '10/noga', 90], ['cable-pull-through', 3, '12-15', 60], ['abductor-machine-3s-pause', 3, '15', 45]], { warmup: GLUTE_WARMUP }),
+      s('Góra A', [['lat-pull-down', 4, '8-10', 90], ['incline-bench-press-db', 3, '8-10', 90], ['row-cable', 3, '10-12', 90], ['side-delt-db-lateral-raises', 3, '12-15', 60], ['face-pull', 2, '15', 60]]),
+      s('Dół: uda', [['back-squat', 4, '6-8', 150], ['leg-press', 3, '10-12', 90], ['leg-curl-machine', 3, '10-12', 60], ['glute-kickback-cable', 3, '12/noga', 45], ['calf-raise-machine', 3, '12-15', 45]], { warmup: GLUTE_WARMUP }),
+      s('Góra B', [['inverted-row', 3, '8-10', 90], ['db-ohp', 3, '8-10', 90], ['1-arm-db-row', 3, '10-12', 90], ['push-up', 3, '8-12', 60], ['pallof-press', 2, '12/strona', 45]]),
+    ],
+  },
+  {
+    id: 'kobiety-posladki-2',
+    place: 'gym',
+    audience: 'women',
+    name: 'Pośladki ekspres 2×',
+    level: 'Każdy poziom',
+    equipment: 'Siłownia lub guma + hantle',
+    perWeek: 2,
+    desc: 'Dwa krótkie treningi (ok. 30 min) skupione na pośladkach. Można je dołożyć do biegania, zajęć fitness albo innego planu.',
+    progression: 'Co tydzień dodaj powtórzenie albo trochę ciężaru w pierwszym ćwiczeniu.',
+    sessions: [
+      s('Pośladki A', [['hip-thrust', 4, '10-12', 90], ['bulgarian-sq', 3, '10/noga', 90], ['sumo-squat-db', 3, '12', 60], ['clamshell-band', 2, '15/strona', 30]], { warmup: GLUTE_WARMUP }),
+      s('Pośladki B', [['rdl', 3, '10', 90], ['step-up-left-right', 3, '10/noga', 60], ['sl-glute-bridge', 3, '12/noga', 45], ['donkey-kick', 2, '15/noga', 30]], { warmup: GLUTE_WARMUP }),
+    ],
+  },
+  {
+    id: 'kobiety-sila-3',
+    place: 'gym',
+    audience: 'women',
+    name: 'Silna: sztanga 3×',
+    level: 'Średniozaawansowany',
+    equipment: 'Siłownia (sztanga)',
+    perWeek: 3,
+    desc: 'Plan na siłę: przysiad, martwy ciąg, wyciskanie i hip thrust na sztandze, mało powtórzeń i dłuższe przerwy. Wzmacnia kości i stawy, co po 30. roku życia ma coraz większe znaczenie.',
+    progression: 'Gdy zrobisz wszystkie serie przy RIR 2, dodaj 2,5 kg (w hip thruście i martwym ciągu do 5 kg).',
+    sessions: [
+      s('Siła A', [['back-squat', 4, '5', 150], ['bench-press', 4, '5-6', 150], ['bent-over-row-bar', 3, '8', 90], ['hip-thrust', 3, '8', 90]], { warmup: GLUTE_WARMUP }),
+      s('Siła B', [['deadlift', 3, '5', 180], ['db-ohp', 3, '8', 90], ['lat-pull-down', 3, '8-10', 90], ['reverse-lunge', 3, '8/noga', 90]], { warmup: GLUTE_WARMUP }),
+      s('Siła C', [['back-squat', 3, '8', 120], ['hip-thrust', 4, '6-8', 120], ['incline-bench-press-db', 3, '8-10', 90], ['pallof-press', 2, '10/strona', 45]], { warmup: GLUTE_WARMUP }),
+    ],
+  },
+  {
+    id: 'kobiety-dom-gumy-3',
+    place: 'home',
+    audience: 'women',
+    name: 'Dom: gumy i hantle',
+    level: 'Początkujący',
+    equipment: 'Gumy oporowe, para hantli, mata',
+    perWeek: 3,
+    desc: 'Trening w domu na całe ciało z akcentem na pośladki. Wystarczy zestaw gum (mini band i długa) oraz para hantli.',
+    progression: 'Zmieniaj gumę na mocniejszą albo dodaj powtórzenia, gdy seria jest za łatwa.',
+    sessions: [
+      s('Dom A', [['sumo-squat-db', 3, '12-15', 60], ['glute-bridge', 3, '15', 45], ['band-row', 3, '12-15', 45], ['push-up', 3, '6-10', 60], ['clamshell-band', 2, '15/strona', 30]], { warmup: GLUTE_WARMUP }),
+      s('Dom B', [['reverse-lunge', 3, '10/noga', 60], ['db-rdl', 3, '12', 60], ['db-ohp', 3, '10-12', 60], ['band-pull-apart', 3, '15', 30], ['dead-bug-band', 2, '8/strona', 30]], { warmup: GLUTE_WARMUP }),
+      s('Dom C', [['bulgarian-sq', 3, '10/noga', 60], ['sl-glute-bridge', 3, '12/noga', 45], ['1-arm-db-row', 3, '10-12', 60], ['donkey-kick', 2, '15/noga', 30], ['plank', 3, '30s', 30]], { warmup: GLUTE_WARMUP }),
+    ],
+  },
+  {
+    id: 'kobiety-obwody-3',
+    place: 'home',
+    audience: 'women',
+    name: 'Obwody: siła + tętno',
+    level: 'Każdy poziom',
+    equipment: 'Para hantli, mata',
+    perWeek: 3,
+    desc: 'Ćwiczenia wykonywane w obwodzie z krótkimi przerwami: siła i kondycja w 30 minut. Dobre na redukcji, gdy brakuje czasu na osobne cardio.',
+    progression: 'Najpierw dokładaj rundę (z 3 do 4), potem skracaj przerwy.',
+    sessions: [
+      s('Obwód A', [['goblet-sq', 3, '12', 15], ['push-up', 3, '8-10', 15], ['1-arm-db-row', 3, '10/strona', 15], ['jumping-jacks', 3, '40s', 15], ['glute-bridge', 3, '15', 60]], { warmup: GLUTE_WARMUP }),
+      s('Obwód B', [['reverse-lunge', 3, '10/noga', 15], ['db-ohp', 3, '10', 15], ['db-rdl', 3, '12', 15], ['mountain-climbers', 3, '30s', 15], ['plank', 3, '30s', 60]], { warmup: GLUTE_WARMUP }),
+      s('Obwód C', [['sumo-squat-db', 3, '15', 15], ['band-row', 3, '15', 15], ['step-up-left-right', 3, '10/noga', 15], ['jumping-jacks', 3, '40s', 15], ['dead-bug-band', 3, '8/strona', 60]], { warmup: GLUTE_WARMUP }),
+    ],
+  },
+  {
+    id: 'kobiety-postawa-3',
+    place: 'cardio',
+    audience: 'women',
+    name: 'Core i postawa',
+    level: 'Każdy poziom',
+    equipment: 'Mata, guma',
+    perWeek: 3,
+    noRir: true,
+    desc: 'Krótkie sesje (ok. 20 min) na brzuch, plecy i ułożenie barków. Pomagają przy pracy przy biurku i dobrze łączą się z każdym planem siłowym.',
+    progression: 'Wydłużaj czas w pozycjach o 5 s albo dodaj powtórzenie, bez bólu.',
+    sessions: [
+      s('Postawa A', [['cat-cow', 2, '10', 0], ['dead-bug-band', 3, '8/strona', 30], ['band-pull-apart', 3, '15', 30], ['glute-bridge', 3, '12', 30], ['lateral-plank', 2, '20s/strona', 30]], { warmup: [], cooldown: MOBILITY_COOLDOWN }),
+      s('Postawa B', [['thoracic-rotation', 2, '8/strona', 0], ['brid-dog', 3, '8/strona', 30], ['superman', 3, '10', 30], ['clamshell-band', 2, '15/strona', 30], ['plank', 3, '30s', 30]], { warmup: [], cooldown: MOBILITY_COOLDOWN }),
+      s('Postawa C', [['hip-90-90', 2, '8/strona', 0], ['pallof-press', 3, '10/strona', 30], ['band-row', 3, '15', 30], ['sl-glute-bridge', 2, '10/noga', 30], ['hollow-body', 3, '20s', 30]], { warmup: [], cooldown: MOBILITY_COOLDOWN }),
+    ],
+  },
+  {
+    id: 'masa-gora-5',
+    place: 'gym',
+    audience: 'men',
+    name: 'Masa: góra ciała 5×',
+    level: 'Średniozaawansowany',
+    equipment: 'Siłownia',
+    perWeek: 5,
+    desc: 'Klatka i plecy, nogi, barki i ramiona, potem znowu góra i dół. Każda partia dwa razy w tygodniu, więcej objętości na klatkę, plecy i ramiona.',
+    progression: 'Podwójna progresja. Na masie dodawaj ok. 200–300 kcal ponad utrzymanie i celuj w 0,25–0,5% masy ciała przyrostu tygodniowo.',
+    sessions: [
+      s('Klatka i plecy', [['bench-press', 4, '6-8', 150], ['bent-over-row-bar', 4, '6-8', 120], ['incline-bench-press-db', 3, '8-10', 90], ['lat-pull-down', 3, '10-12', 90], ['cable-chest-fly', 2, '12-15', 60]]),
+      s('Nogi', [['back-squat', 4, '6-8', 180], ['rdl', 3, '8-10', 120], ['leg-press', 3, '10-12', 90], ['leg-curl-machine', 3, '10-12', 60], ['calf-raise-machine', 3, '12-15', 45]]),
+      s('Barki i ramiona', [['ohp', 4, '6-8', 120], ['side-delt-db-lateral-raises', 4, '12-15', 60], ['face-pull', 3, '15', 60], ['db-curl', 3, '10-12', 60], ['tricpes-press-v-grip-cable', 3, '10-12', 60]]),
+      s('Góra', [['db-bench', 3, '8-10', 90], ['pull-up', 4, '6-10', 120], ['dips', 3, '8-10', 90], ['row-cable', 3, '10-12', 90], ['bicpes-curl-easy-bar', 2, '10-12', 60]]),
+      s('Dół', [['deadlift', 3, '5', 180], ['bulgarian-sq', 3, '8/noga', 90], ['leg-extension', 3, '12-15', 60], ['hanging-knee-raise', 3, '10-12', 60]]),
+    ],
+  },
+];
+
+export const TEMPLATES = [...BASIC, ...EXTRA, ...COACH_TEMPLATES];
+
 // RIR (reps in reserve) for 4 weeks: start easy, finish close to failure.
 const WEEK_RIR = [3, 2, 2, 1];
 
 export const PLACES = { gym: 'Siłownia', home: 'Dom', cardio: 'Kondycja i mobilność' };
+export const AUDIENCES = { all: 'Wszystkie', women: 'Dla kobiet', men: 'Dla mężczyzn' };
+export const forAudience = (t, a) => a === 'all' || t.audience === a || t.audience === 'all';
+
+// Coach templates carry full weeks; copy them and number items/sessions.
+function copyWeeks(template, id) {
+  return template.weeks.map((w, wi) => ({
+    id: `${id}-w${wi + 1}`,
+    number: wi + 1,
+    label: w.label ?? null,
+    sessions: w.sessions.map((sess, si) => {
+      let order = 0;
+      return {
+        order: si + 1,
+        blocks: sess.blocks.map((b) => ({ type: b.type, items: b.items.map((it) => ({ ...it, order: ++order })) })),
+      };
+    }),
+  }));
+}
 
 export function buildProgram(template, id) {
+  if (template.weeks) return { id, name: template.name, templateId: template.id, weeks: copyWeeks(template, id) };
   const weeks = WEEK_RIR.map((rir, wi) => ({
     id: `${id}-w${wi + 1}`,
     number: wi + 1,
@@ -245,4 +419,20 @@ export function buildProgram(template, id) {
   return { id, name: template.name, templateId: template.id, weeks };
 }
 
-export const templateExerciseIds = (t) => [...new Set((t.weekSessions?.flat() ?? t.sessions).flatMap((x) => [...x.warmup, ...x.main.map((m) => m[0]), ...x.cooldown]))];
+export const templateExerciseIds = (t) => [...new Set(t.weeks
+  ? t.weeks.flatMap((w) => w.sessions.flatMap((x) => x.blocks.flatMap((b) => b.items.map((i) => i.exerciseId))))
+  : (t.weekSessions?.flat() ?? t.sessions).flatMap((x) => [...x.warmup, ...x.main.map((m) => m[0]), ...x.cooldown]))];
+
+// First-week main exercises for the template preview: [{ name, items: [{ exerciseId, sets, reps, percent1RM, rir }] }].
+export function templatePreview(t) {
+  if (t.weeks) {
+    return t.weeks[0].sessions.map((x, i) => ({
+      name: `Trening ${i + 1}`,
+      items: x.blocks.filter((b) => b.type === 'main').flatMap((b) => b.items),
+    }));
+  }
+  return t.sessions.map((x) => ({
+    name: x.name,
+    items: x.main.map(([exerciseId, sets, reps]) => ({ exerciseId, sets, ...(typeof reps === 'number' ? { reps } : { repsText: reps }) })),
+  }));
+}
