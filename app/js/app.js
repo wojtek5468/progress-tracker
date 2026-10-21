@@ -13,6 +13,11 @@ import { SCHEMA_VERSION, migrate, checkImport } from './migrate.js';
 import { parseHealthText } from './health-text.js';
 import { workoutsFromCsv, EXERCISE_MAP, sharedPlan, encodePlan, decodePlan } from './importers.js';
 import { parseMealText, lineGrams, unitGrams, searchName, UNITS } from './measures.js';
+import { fitToTime, estimateMinutes, readiness, lighterSession } from './training-plus.js';
+import {
+  exerciseMediaBlock, muscleCard, viewCalendar, streakLine, viewCardio, cardioSummary, shareWorkout, plateauCard,
+  createNextBlock, swapSuggestions, exerciseFilters, matchesFilter, EQUIPMENT, equipmentOf,
+} from './views-training.js';
 import {
   MEALS, view, titleEl, backBtn, data, exerciseById, NO_1RM_CATEGORIES, BLOCK_NAMES, esc, fmt, exInfo, exName, uid, sessionTitle, targets, isoWeekday, isTrainingDay, targetsFor, weightPoints, dailyIntake, adaptive, dateLabel, setData, render, currentWeek, sessionSummary, lastWithin, avg, todayIso, save, sessionKey, current1RM, previousSets, suggestedKg, defaultReps, ensureExercise, foodById, entryMacros, sumMacros, dayEntries, shiftDate, saveFood,
 } from './core.js';
@@ -259,6 +264,7 @@ async function viewToday() {
       ${hero.icon === 'plus' ? '' : `<a href="#/food-add/${today}/${meal}">${icon('apple', 'icon-sm')}<span>Posiłek</span></a>`}
       <a href="#/measure">${icon('scale', 'icon-sm')}<span>Ważenie</span></a>
       ${draft ? '' : `<a href="#/log-free">${icon('dumbbell', 'icon-sm')}<span>Bez planu</span></a>`}
+      <a href="#/cardio">${icon('bike', 'icon-sm')}<span>Cardio</span></a>
       ${cw ? '' : `<a href="#/templates">${icon('calendar-days', 'icon-sm')}<span>Wybierz plan</span></a>`}
     </div>
     <div class="stats three">
@@ -316,11 +322,29 @@ function viewPlans() {
   };
 }
 
+// Weeks of a plan side by side: bar height is the average %1RM of the main lifts (or the
+// number of sets when the plan has no percentages); the current week is highlighted.
+function planTimeline(program) {
+  const cw = currentWeek();
+  const rows = program.weeks.map((w) => {
+    const items = w.sessions.flatMap((s) => (s.blocks.find((b) => b.type === 'main') ?? s.blocks[0])?.items ?? []);
+    const pct = items.map((it) => it.percent1RM).filter(Boolean);
+    return { w, value: pct.length ? avg(pct) * 100 : items.reduce((n, it) => n + (it.sets ?? 1), 0), pct: pct.length > 0 };
+  });
+  const usePct = rows.every((r) => r.pct);
+  const max = Math.max(...rows.map((r) => r.value), 1);
+  const floor = usePct ? Math.max(0, Math.min(...rows.map((r) => r.value)) - 10) : 0;
+  return `<div class="card"><p>Przebieg planu · ${usePct ? 'średni %1RM' : 'liczba serii'}</p>
+    <div class="timeline">${rows.map((r) => `<a href="#/week/${program.id}/${r.w.number}" class="${cw?.week === r.w ? 'current' : ''}${/odciąż|deload/i.test(r.w.label ?? '') ? ' deload' : ''}" aria-label="Tydzień ${r.w.number}">
+      <span style="height:${Math.max(6, Math.round((r.value - floor) / (max - floor || 1) * 100))}%"></span><i>${r.w.number}</i></a>`).join('')}</div></div>`;
+}
+
 function viewProgram(programId) {
   const selected = data.programs.find((p) => p.id === programId);
   if (!selected) return viewPlans();
   const isCurrent = currentWeek()?.program === selected;
   render(selected.name, `
+    ${selected.weeks.length > 1 ? planTimeline(selected) : ''}
     ${selected.weeks.length ? `<div class="list">
       ${[...selected.weeks].reverse().map((w) => `
         <a class="row" href="#/week/${selected.id}/${w.number}">
@@ -331,6 +355,8 @@ function viewProgram(programId) {
         </a>`).join('')}
     </div>` : '<p class="muted small" style="margin:0 4px 12px">Ten plan nie ma jeszcze tygodni.</p>'}
     <button class="btn" id="add-week">${icon('plus', 'icon-sm')} Dodaj tydzień</button>
+    ${selected.weeks.length ? `<button class="btn secondary" id="next-block" style="margin-top:12px">${icon('layers', 'icon-sm')} Utwórz kolejny blok (4 tyg.)</button>
+      <p class="muted small" style="margin:6px 4px 0">Na bazie ostatniego tygodnia: 3 tygodnie z rosnącym ciężarem (+2,5% 1RM lub +2,5 kg co tydzień) i tydzień odciążenia. Kilogramy z %1RM policzą się z Twoich aktualnych rekordów.</p>` : ''}
     ${!isCurrent && selected.weeks.length ? `<button class="btn secondary" id="make-current" style="margin-top:12px">${icon('play', 'icon-sm')} Realizuj ten plan</button>` : ''}
     <details class="list" style="margin-top:12px">
       <summary>${icon('share-2', 'icon-sm')}<span class="grow">Udostępnij plan znajomemu</span><span class="chev">${icon('chevron-right', 'icon-sm')}</span></summary>
@@ -356,6 +382,10 @@ function viewProgram(programId) {
     data.settings.currentWeek = selected.weeks[0].number;
     await save();
     route();
+  });
+  document.getElementById('next-block')?.addEventListener('click', async () => {
+    const block = await createNextBlock(selected);
+    location.hash = `#/plans/${block.id}`;
   });
   document.getElementById('share-plan').onclick = () => sharePlan(selected, document.getElementById('share-kg').checked).catch((err) => alert(`Nie udało się przygotować linku: ${err.message}`));
   document.getElementById('rename-program').onclick = async () => {
@@ -787,6 +817,10 @@ function viewProgress() {
       ${stepBars(14)}
     </a>
     ${measurementsCard()}
+    ${plateauCard()}
+    <a class="list row" href="#/calendar">${icon('calendar', 'icon-sm')}<div class="grow"><div class="title">Kalendarz treningów</div>
+      <div class="sub">${streakLine() || 'Dni z treningami i seria tygodni'}</div></div><span class="chev">${icon('chevron-right', 'icon-sm')}</span></a>
+    ${muscleCard()}
     ${volumeCard()}
     <div class="section-title">Rekordy 1RM</div>
     <div class="list">
@@ -1211,13 +1245,29 @@ function progressionHint(exerciseId, targetReps = null) {
   return hint && { ...hint, reason: `${fmt(hint.kg, 2)} kg: ${hint.reason}` };
 }
 
+// Pain marked on an exercise: { since, note }; cleared by the user.
+const painFor = (id) => data.settings.pain?.[id] ?? null;
+
+// Readiness from today's sleep and resting heart rate (Shortcut) and how hard the last sessions were.
+function todayReadiness() {
+  const day = dayLog(todayIso());
+  const hrs = lastWithin(data.dailyLogs ?? [], 'restingHr', 30);
+  const rirs = (data.workoutLogs ?? []).slice(-2).flatMap((l) => l.entries.flatMap((e) => e.sets)).map((x) => x.rir).filter((x) => x != null);
+  return readiness({ sleepMin: day?.sleepMin ?? null, restingHr: day?.restingHr ?? null, baselineHr: avg(hrs), recentRir: avg(rirs) });
+}
+
 function newDraft(program, week, session) {
   const main = session.blocks.find((b) => b.type === 'main')?.items ?? session.blocks.flatMap((b) => b.items);
   return {
     sessionKey: sessionKey(program.id, week.number, session.order),
     title: `${program.name} · tydz. ${week.number} · ${sessionTitle(session)}`,
     startedAt: Date.now(),
-    entries: main.map((it) => {
+    entries: main.map((item) => {
+      // An exercise marked as painful is swapped for a similar one until the pain is cleared.
+      const sore = painFor(item.exerciseId);
+      const alt = sore && swapSuggestions(item.exerciseId)[0];
+      const it = alt ? { ...item, exerciseId: alt, percent1RM: null, plannedKg: null } : item;
+      if (alt) addCatalogExercise(alt);
       const prev = previousSets(it.exerciseId)?.sets ?? [];
       // A weight from the plan (kg or %1RM) wins; otherwise progression from the last sessions.
       const planned = suggestedKg(it);
@@ -1228,6 +1278,7 @@ function newDraft(program, week, session) {
         plan: itemChips(it),
         ...(it.group ? { group: it.group } : {}),
         ...(hint ? { hint: hint.reason } : {}),
+        ...(alt ? { swappedFor: item.exerciseId } : {}),
         sets: Array.from({ length: it.sets ?? 1 }, (_, i) => ({
           kg: planned ?? hint?.kg ?? (prev[i] ?? prev.at(-1))?.kg ?? null, reps: defaultReps(it), done: false,
         })),
@@ -1292,6 +1343,8 @@ function exerciseIdFromName(name) {
 
 function drawLog(draft, back) {
   let swapIndex = null;
+  const ready = todayReadiness();
+  const started = () => draft.entries.some((en) => en.sets.some((x) => x.done));
   const persist = () => db.set('draft', draft);
   const prevOf = (en) => previousSets(en.exerciseId);
   const barKg = () => data.settings.barKg ?? DEFAULT_BAR_KG;
@@ -1326,7 +1379,12 @@ function drawLog(draft, back) {
   const draw = () => {
     const y = window.scrollY;
     render('Trening', `
-      <p class="muted small" style="margin:0 4px 12px">${esc(draft.title)}</p>
+      <p class="muted small" style="margin:0 4px 8px">${esc(draft.title)} · ok. ${estimateMinutes(draft.entries)} min</p>
+      ${!started() ? `<div class="log-tools">
+        <button type="button" class="chip" id="fit-time">${icon('clock', 'icon-xs')} Mam mało czasu</button>
+        ${ready && ready.level !== 'good' && !draft.lighter ? `<button type="button" class="chip" id="lighter">${icon('activity', 'icon-xs')} Lżejsza wersja</button>` : ''}
+      </div>` : ''}
+      ${ready && !started() ? `<p class="small muted" style="margin:0 4px 12px">Gotowość ${ready.score}/100. ${esc(ready.advice)}</p>` : ''}
       ${draft.entries.map((en, e) => {
         const prev = prevOf(en);
         const ss = supersetLabels(draft.entries)[e];
@@ -1341,6 +1399,8 @@ function drawLog(draft, back) {
           ${exInfo(en.exerciseId).desc ? `<div class="desc clamp">${esc(exInfo(en.exerciseId).desc)}</div>` : ''}
           ${en.plan ? `<div class="meta">${en.plan}</div>` : ''}
           ${en.hint ? `<div class="small hint">${icon('trending-up', 'icon-xs')} Propozycja ${esc(en.hint)}</div>` : ''}
+          ${en.swappedFor ? `<div class="small warn">${icon('triangle-alert', 'icon-xs')} Zamiast „${esc(exName(en.swappedFor))}” (zaznaczony ból).</div>` : ''}
+          ${painFor(en.exerciseId) ? `<div class="small warn">${icon('triangle-alert', 'icon-xs')} Zaznaczony ból. Lżej albo zamień ćwiczenie.</div>` : ''}
           ${prev ? `<div class="small muted prev-hint">Pod numerem serii: wynik z ${dateLabel(prev.date)}</div>` : ''}
           <div class="sets" id="sets-${e}">${en.sets.map((set, i) => setRow(e, i, set)).join('')}</div>
           ${en.showPlates ? platesLine(en, e) : ''}
@@ -1349,6 +1409,7 @@ function drawLog(draft, back) {
             ${canWarmUp(en) ? `<button type="button" class="link-btn" data-warmup="${e}">Rozgrzewka</button>` : ''}
             ${barbell(en) ? `<button type="button" class="link-btn" data-plates="${e}">${en.showPlates ? 'Ukryj talerze' : 'Talerze'}</button>` : ''}
             ${en.note == null ? `<button type="button" class="link-btn" data-note-open="${e}">Notatka</button>` : ''}
+            <button type="button" class="link-btn" data-pain="${e}">${painFor(en.exerciseId) ? 'Już nie boli' : 'Ból'}</button>
             ${e > 0 ? `<button type="button" class="link-btn" data-link="${e}">${en.group && en.group === draft.entries[e - 1].group ? 'Rozłącz superserię' : 'Superseria'}</button>` : ''}
           </div>
           ${en.note != null ? `<textarea class="note" data-note="${e}" rows="2" placeholder="Np. ból barku, za lekko, zmiana chwytu">${esc(en.note)}</textarea>` : ''}
@@ -1359,7 +1420,9 @@ function drawLog(draft, back) {
         <datalist id="ex-list">${exerciseChoices().map((c) => `<option value="${esc(c.name)}"></option>`).join('')}</datalist>
         <button class="icon-btn accent" aria-label="${swapIndex != null ? 'Zamień' : 'Dodaj'}">${icon(swapIndex != null ? 'check' : 'plus')}</button>
       </form>
-      ${swapIndex != null ? '<button type="button" class="link-btn" id="cancel-swap" style="margin:-4px 4px 12px">Anuluj zamianę</button>' : ''}
+      ${swapIndex != null ? `${swapSuggestions(draft.entries[swapIndex].exerciseId).length ? `<div class="small muted" style="margin:-4px 4px 6px">Podobne ćwiczenia (te same mięśnie):</div>
+        <div class="meta card" style="padding:10px">${swapSuggestions(draft.entries[swapIndex].exerciseId).map((id) => `<button type="button" class="chip" data-swap-to="${esc(id)}">${esc(exName(id))}</button>`).join('')}</div>` : ''}
+        <button type="button" class="link-btn" id="cancel-swap" style="margin:-4px 4px 12px">Anuluj zamianę</button>` : ''}
       <button class="btn" id="finish">${icon('check', 'icon-sm')} Zakończ i zapisz</button>
       <button class="btn danger" id="discard" style="margin-top:12px">Porzuć trening</button>
     `, { back });
@@ -1388,6 +1451,28 @@ function drawLog(draft, back) {
       const noteOpen = ev.target.closest('[data-note-open]');
       const warm = ev.target.closest('[data-warmup]');
       const link = ev.target.closest('[data-link]');
+      const swapTo = ev.target.closest('[data-swap-to]');
+      const pain = ev.target.closest('[data-pain]');
+      if (swapTo) {
+        const input = document.querySelector('#ex-pick input');
+        input.value = exName(swapTo.dataset.swapTo);
+        return document.getElementById('ex-pick').requestSubmit();
+      }
+      if (pain) {
+        const id = draft.entries[Number(pain.dataset.pain)].exerciseId;
+        data.settings.pain ??= {};
+        if (data.settings.pain[id]) delete data.settings.pain[id];
+        else {
+          const note = prompt(`Co boli przy „${exName(id)}”? (opcjonalnie)`, '');
+          if (note === null) return;
+          data.settings.pain[id] = { since: todayIso(), note: note.trim() };
+          if (swapSuggestions(id).length && confirm('Zamienić to ćwiczenie na podobne, które może mniej obciążać? Dopóki ból nie minie, plan sam podstawi zamiennik.')) {
+            swapIndex = Number(pain.dataset.pain);
+          }
+        }
+        await save();
+        return draw();
+      }
       if (link) {
         toggleSuperset(draft.entries, Number(link.dataset.link));
         await persist();
@@ -1447,6 +1532,22 @@ function drawLog(draft, back) {
       }
     };
     document.getElementById('cancel-swap')?.addEventListener('click', () => { swapIndex = null; draw(); });
+    document.getElementById('fit-time')?.addEventListener('click', async () => {
+      const minutes = Number(prompt(`Ile masz minut? Teraz ok. ${estimateMinutes(draft.entries)} min.`, '30'));
+      if (!(minutes > 0)) return;
+      if (estimateMinutes(draft.entries) <= minutes) return alert('Ten trening już się mieści w tym czasie.');
+      const r = fitToTime(draft.entries, minutes);
+      draft.entries = r.entries.map(({ main, ...en }) => en);
+      await persist();
+      draw();
+      alert(`Gotowe: ok. ${r.minutes} min. Główne ćwiczenia zostały, dodatkowe mają po 2 serie w superseriach i krótsze przerwy${r.dropped.length ? `. Pominięte: ${r.dropped.map(exName).join(', ')}` : ''}.`);
+    });
+    document.getElementById('lighter')?.addEventListener('click', async () => {
+      draft.entries = lighterSession(draft.entries);
+      draft.lighter = true;
+      await persist();
+      draw();
+    });
     document.getElementById('ex-pick').onsubmit = async (ev) => {
       ev.preventDefault();
       const name = ev.target.name.value.trim();
@@ -1525,6 +1626,8 @@ async function finishLog(draft) {
   location.hash = `#/history/${log.id}`;
 }
 
+const CARDIO_LABEL = (log) => `${fmt(log.cardio.minutes)} min${log.cardio.km ? ` · ${fmt(log.cardio.km, 2)} km` : ''} · ${fmt(log.cardio.kcal)} kcal`;
+
 function viewHistory(id) {
   const log = (data.workoutLogs ?? []).find((l) => l.id === id);
   if (!log) return viewProgress();
@@ -1532,8 +1635,9 @@ function viewHistory(id) {
     <div class="card">
       <p>${new Date(log.date).toLocaleDateString('pl-PL', { weekday: 'long', day: 'numeric', month: 'long' })}</p>
       <h2>${esc(log.title)}</h2>
-      <p class="small">${log.durationMin} min · ${fmt(log.volumeKg)} kg objętości</p>
+      <p class="small">${log.cardio ? `${CARDIO_LABEL(log)}` : `${log.durationMin} min · ${fmt(log.volumeKg)} kg objętości`}</p>
     </div>
+    ${log.cardio ? cardioSummary(log) : ''}
     ${log.records.length ? `<div class="card record">${icon('trophy')}<div><b>Nowy rekord!</b><p>${log.records.map((r) => esc(exName(r))).join(', ')}</p></div></div>` : ''}
     <div class="list">
       ${log.entries.map((en) => `
@@ -1543,8 +1647,10 @@ function viewHistory(id) {
           ${en.note ? `<div class="desc">${esc(en.note)}</div>` : ''}
         </div>`).join('')}
     </div>
-    <button class="btn danger" id="delete-log">${icon('trash-2', 'icon-sm')} Usuń ten wpis</button>
+    <button class="btn secondary" id="share-log">${icon('share-2', 'icon-sm')} Udostępnij podsumowanie</button>
+    <button class="btn danger" id="delete-log" style="margin-top:12px">${icon('trash-2', 'icon-sm')} Usuń ten wpis</button>
   `, { back: '#/progress' });
+  document.getElementById('share-log').onclick = () => shareWorkout(log).catch((err) => alert(`Nie udało się przygotować obrazka: ${err.message}`));
   document.getElementById('delete-log').onclick = async () => {
     if (!confirm('Usunąć ten trening z historii?')) return;
     data.workoutLogs = data.workoutLogs.filter((l) => l.id !== id);
@@ -1754,6 +1860,7 @@ function exerciseUsage(id) {
 }
 
 function viewExercises() {
+  const filter = { muscle: '', equipment: '' };
   const groups = new Map([...CATEGORIES, 'Inne'].map((c) => [c, []]));
   for (const e of data.exercises) {
     const info = exInfo(e.id);
@@ -1761,27 +1868,37 @@ function viewExercises() {
   }
   render('Ćwiczenia', `
     <div class="card add-row"><input type="search" id="ex-search" placeholder="Szukaj ćwiczenia…" autocomplete="off"></div>
+    <div id="ex-filters">${exerciseFilters(filter)}</div>
     <a class="btn" href="#/exercise/new">${icon('plus', 'icon-sm')} Nowe ćwiczenie</a>
     <div id="ex-groups">
     ${[...groups].filter(([, list]) => list.length).map(([cat, list]) => `
       <div class="section-title">${esc(cat)}</div>
       <div class="list">
         ${list.sort((a, b) => a.name.localeCompare(b.name, 'pl')).map((x) => `
-          <a class="row" href="#/exercise/${encodeURIComponent(x.id)}" data-q="${esc(`${x.name} ${x.original}`.toLowerCase())}">
+          <a class="row" href="#/exercise/${encodeURIComponent(x.id)}" data-id="${esc(x.id)}" data-q="${esc(`${x.name} ${x.original}`.toLowerCase())}">
             <div class="grow"><div class="title">${esc(x.name)}</div>${x.desc ? `<div class="sub clamp">${esc(x.desc)}</div>` : ''}</div>
             <span class="chev">${icon('chevron-right', 'icon-sm')}</span>
           </a>`).join('')}
       </div>`).join('')}
     </div>
   `, { back: '#/settings' });
-  document.getElementById('ex-search').oninput = (ev) => {
-    const q = ev.target.value.trim().toLowerCase();
-    view.querySelectorAll('#ex-groups .row').forEach((r) => { r.hidden = q && !r.dataset.q.includes(q); });
+  const apply = () => {
+    const q = document.getElementById('ex-search').value.trim().toLowerCase();
+    view.querySelectorAll('#ex-groups .row').forEach((r) => { r.hidden = (q && !r.dataset.q.includes(q)) || !matchesFilter(r.dataset.id, filter); });
     view.querySelectorAll('#ex-groups .list').forEach((l) => {
       const any = [...l.querySelectorAll('.row')].some((r) => !r.hidden);
       l.hidden = !any;
       l.previousElementSibling.hidden = !any;
     });
+  };
+  document.getElementById('ex-search').oninput = apply;
+  document.getElementById('ex-filters').onclick = (ev) => {
+    const b = ev.target.closest('[data-filter]');
+    if (!b) return;
+    const [kind, value] = b.dataset.filter.split(':');
+    filter[kind] = filter[kind] === value ? '' : value;
+    document.getElementById('ex-filters').innerHTML = exerciseFilters(filter);
+    apply();
   };
 }
 
@@ -1831,13 +1948,14 @@ function viewExercise(rawId) {
   const ex = exerciseById.get(id);
   if (!isNew && !ex && CATALOG[id]) {
     // Exercise from a ready-made plan the user has not added yet: description only.
-    return render('Ćwiczenie', `<div class="card"><h2>${esc(CATALOG[id].name)}</h2><p style="color:var(--text);margin-top:8px">${esc(CATALOG[id].desc)}</p></div>`, { back: 'history' });
+    return render('Ćwiczenie', `<div class="card"><h2>${esc(CATALOG[id].name)}</h2><p style="color:var(--text);margin-top:8px">${esc(CATALOG[id].desc)}</p></div>${exerciseMediaBlock(id)}`, { back: 'history' });
   }
   if (!isNew && !ex) return viewExercises();
   const info = isNew ? { name: '', desc: '', cat: 'Nogi', original: '' } : exInfo(id);
   const uses = isNew ? 0 : exerciseUsage(id);
   const best = isNew ? null : current1RM(id);
   render(isNew ? 'Nowe ćwiczenie' : info.name, `
+    ${isNew ? '' : exerciseMediaBlock(id)}
     ${isNew ? '' : exerciseProgress(id, best)}
     <form id="ex-form">
       <div class="list form">
@@ -2839,6 +2957,9 @@ const ROUTES = [
   [/^#\/recipe\/([\w-]+)$/, (id) => viewRecipe(id), 'diet'],
   [/^#\/recipe\/([\w-]+)\/(\d{4}-\d{2}-\d{2})\/(\w+)$/, viewRecipe, 'diet'],
   [/^#\/steps$/, viewSteps, 'today'],
+  [/^#\/cardio$/, viewCardio, 'today'],
+  [/^#\/calendar$/, () => viewCalendar(), 'progress'],
+  [/^#\/calendar\/(\d{4}-\d{2})$/, viewCalendar, 'progress'],
   [/^#\/shortcut$/, viewShortcut, 'today'],
   [/^#\/templates$/, viewTemplates, 'plans'],
   [/^#\/template\/([\w-]+)$/, viewTemplate, 'plans'],

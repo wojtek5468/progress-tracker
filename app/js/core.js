@@ -167,3 +167,11 @@ export function saveFood(food) {
   data.foods.push(saved);
   return saved;
 }
+
+// Polish plural: plural(2, 'trening', 'treningi', 'treningów') → 'treningi'.
+export function plural(n, one, few, many) {
+  if (n === 1) return one;
+  const d = n % 10;
+  const t = n % 100;
+  return d >= 2 && d <= 4 && (t < 12 || t > 14) ? few : many;
+}
