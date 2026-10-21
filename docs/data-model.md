@@ -56,6 +56,9 @@ python3 tools/export_templates.py data/seed.json app/js/plan-templates-coach.js
 | `dailyLogs[].steps`, `.activeKcal` | numbers | Also written by manual entry or the iOS Shortcut paste (`kroki=… kcal=…`). |
 | `settings.stepsGoal`, `settings.usdaKey`, `settings.foodTab`, `settings.templateAudience` | | Daily step goal (default 8000), optional personal USDA API key, last used tab in the add-food screen, last ready-made plan filter (`all`/`women`/`men`). |
 | `profile.tdeeMode` | `'formula'` (default) \| `'adaptive'` | `adaptive`: maintenance kcal comes from the food diary and the slope of weigh-ins over the last 28 days (needs 14+ days of data). |
+| `workoutLogs[].entries[]` | `{exerciseId, sets: [{kg, reps, rir?}], note?}` | RIR per set and a note per exercise are optional. Workouts started without a plan have `sessionKey: 'free'`. |
+| `foodLog[date][]` quick entry | `{id, meal, quick: {name, kcal, p, f, c}}` | "Szybki wpis": calories without a product; no `foodId`/`grams`. |
+| `bodyMeasurements[]` tape | `waistCm, hipsCm, chestCm, armCm, thighCm` | One row per day; weight and tape values are merged into it. |
 | `foods[].code` | | For custom products created after a failed barcode scan, the scanned EAN. |
 | `oneRepMaxes[].source` | `'trening'` \| `'ręcznie'` \| sheet | Records are now saved for every exercise (sets up to 10 reps), and can be entered by hand on the exercise screen. |
 | `dailyLogs[].sleepMin`, `.restingHr` | | Also written by the Shortcut paste (`sen=7,2 tetno=58`); `waga=`/`tluszcz=` go to `bodyMeasurements`. |

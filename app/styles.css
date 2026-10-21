@@ -313,3 +313,28 @@ code { font-size: 13px; background: var(--bg); padding: 1px 5px; border-radius: 
 .scanner-hint { position: absolute; bottom: calc(48px + env(safe-area-inset-bottom)); left: 0; right: 0; text-align: center; color: #fff; font-weight: 600; }
 .scanner-close { position: absolute; top: calc(16px + env(safe-area-inset-top)); right: 16px; width: 44px; height: 44px; border-radius: 22px; border: 0; background: rgba(0, 0, 0, .5); color: #fff; display: grid; place-items: center; }
 .scanner-close .icon { width: 24px; height: 24px; }
+
+/* Flexible workout logger: RIR column, swap/remove, notes */
+.set-row { grid-template-columns: 44px 1fr 1fr 46px 44px; gap: 6px; }
+.set-row input.rir { text-align: center; padding-left: 4px; padding-right: 4px; }
+.log-head { display: flex; align-items: center; gap: 8px; }
+.log-head .name { flex: 1; min-width: 0; }
+.log-head .link-btn { margin-top: 0; }
+.log-actions { display: flex; gap: 16px; align-items: center; }
+.log-card textarea.note { width: 100%; margin-top: 8px; border: 0; border-radius: 10px; background: var(--bg); color: var(--text); padding: 10px 12px; font: inherit; font-size: 15px; resize: vertical; }
+.set-row input { padding: 0 30px 0 8px; }
+.set-row label span { right: 6px; font-size: 11px; }
+.set-row .check { width: 44px; }
+
+/* Tape measurements and weekly volume per muscle group */
+.tape { display: grid; grid-template-columns: repeat(auto-fill, minmax(90px, 1fr)); gap: 10px; margin-top: 8px; }
+.tape div { display: flex; flex-direction: column; }
+.tape b { font-size: 18px; font-variant-numeric: tabular-nums; }
+.tape .down { color: var(--good); }
+.tape .up { color: var(--muted); }
+.volume { display: grid; grid-template-columns: auto 1fr 28px; gap: 8px 10px; align-items: center; margin-top: 8px; font-size: 15px; }
+.volume b { text-align: right; font-variant-numeric: tabular-nums; }
+.bar.vol { position: relative; }
+.bar.vol i { position: absolute; top: 0; bottom: 0; background: var(--accent-soft); border-left: 1px dashed var(--accent); border-right: 1px dashed var(--accent); }
+.bar.vol span { position: relative; }
+.bar.vol > span { background: var(--accent); opacity: .85; }
