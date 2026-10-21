@@ -23,9 +23,16 @@ function fromOff(p) {
   };
 }
 
+// Name search (search-a-licious). Checked 2026-10-21: it sends no CORS headers, so browsers
+// block it; only used when the offline list is missing. Barcode lookups below do allow CORS.
 export async function searchOff(query) {
   const url = `https://search.openfoodfacts.org/search?q=${encodeURIComponent(query)}&langs=pl,en&page_size=25&fields=${OFF_FIELDS}`;
-  const res = await fetch(url);
+  let res;
+  try {
+    res = await fetch(url);
+  } catch {
+    throw new Error('Wyszukiwanie po nazwie w Open Food Facts nie działa z przeglądarki. Zeskanuj albo wpisz kod kreskowy.');
+  }
   if (res.status === 429) throw new Error('Za dużo wyszukiwań. Odczekaj minutę.');
   if (!res.ok) throw new Error(`Open Food Facts odpowiedział błędem ${res.status}.`);
   const body = await res.json();
@@ -61,7 +68,7 @@ export async function searchUsda(query, apiKey) {
 
 // Adds or completes a product in Open Food Facts with the user's own OFF account
 // (https://world.openfoodfacts.org, free). Contributions are published under ODbL.
-// Returns true when OFF confirmed the save; null when the browser could not read the reply.
+// Returns true when OFF confirmed the save; null when the reply was not JSON.
 export async function submitToOff(food, { user, password }) {
   const body = new URLSearchParams({
     code: food.code,
@@ -84,17 +91,12 @@ export async function submitToOff(food, { user, password }) {
   if (food.brand) body.set('brands', food.brand);
   if (food.servingG) body.set('serving_size', `${food.servingG} g`);
   const url = 'https://world.openfoodfacts.org/cgi/product_jqm2.pl';
-  let res;
-  try {
-    res = await fetch(url, { method: 'POST', body });
-  } catch {
-    // Some browsers block reading the reply (CORS); the form is still delivered.
-    await fetch(url, { method: 'POST', body, mode: 'no-cors' });
-    return null;
-  }
+  // OFF answers with Access-Control-Allow-Origin: *, so the reply is readable (checked 2026-10-21).
+  const res = await fetch(url, { method: 'POST', body });
+  if (res.status === 403) throw new Error('Zły login lub hasło do Open Food Facts.');
   if (!res.ok) throw new Error(`Open Food Facts odpowiedział błędem ${res.status}.`);
   const json = await res.json().catch(() => null);
-  if (json && json.status !== 1) throw new Error(json.status_verbose === 'user not signed-in' || /password|login/i.test(json.status_verbose ?? '')
+  if (json && json.status !== 1) throw new Error(/signed-in|credentials|password|login/i.test(json.status_verbose ?? '')
     ? 'Zły login lub hasło do Open Food Facts.' : `Open Food Facts: ${json.status_verbose ?? 'nie zapisano'}.`);
   return json ? true : null;
 }

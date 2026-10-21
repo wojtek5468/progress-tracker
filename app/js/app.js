@@ -5,7 +5,7 @@ import { computeTargets, SOURCES, GOALS, ACTIVITY, weightTrend, trendRate, adapt
 import { searchOff, searchUsda, lookupBarcode, submitToOff } from './foods-api.js';
 import { TEMPLATES, PLACES, AUDIENCES, forAudience, buildProgram, templateExerciseIds, templatePreview } from './plan-templates.js';
 import { scanBarcode } from './scanner.js';
-import { loadLocal, searchLocal, localByCode } from './off-local.js';
+import { loadLocal, localCount, searchLocal, localByCode } from './off-local.js';
 import { RECIPES, INGREDIENTS, recipeTotals, recipePer100, isVege } from './recipes.js';
 
 const MEALS = { breakfast: 'Śniadanie', lunch: 'Obiad', dinner: 'Kolacja', snack: 'Przekąski' };
@@ -1538,9 +1538,10 @@ function viewFoodAdd(date, meal) {
         ? 'Produkty ze sklepów z bazy Open Food Facts, także marki Lidla, Biedronki czy Auchan. Wpisz nazwę, markę lub sklep (np. „jogurt pilos”) albo zeskanuj kod.'
         : 'Produkty podstawowe z bazy USDA, np. „pierś z kurczaka surowa”, „ryż biały gotowany”. Nazwy tłumaczymy automatycznie; po dodaniu możesz je poprawić.'}</p>`;
     }
+    const hint = state.tab === 'off' ? ' Masz produkt w ręku? Zeskanuj kod kreskowy, sprawdzimy całą bazę Open Food Facts.' : '';
     return state.results.length ? `<div class="list">${state.results.map(resultRow).join('')}</div>
-      ${state.local ? '<button type="button" class="link-btn" id="online-search" style="margin:4px">Nie ma? Szukaj też w internecie</button>' : ''}`
-      : '<p class="muted small" style="margin:8px 4px">Nic nie znaleziono. Spróbuj innej nazwy albo dodaj własny produkt.</p>';
+      ${state.local ? `<p class="muted small" style="margin:8px 4px">Nie ma?${hint}</p>` : ''}`
+      : `<p class="muted small" style="margin:8px 4px">Nic nie znaleziono. Spróbuj innej nazwy albo dodaj własny produkt.${hint}</p>`;
   };
 
   const draw = () => {
@@ -1579,7 +1580,6 @@ function viewFoodAdd(date, meal) {
       search();
     };
     document.getElementById('custom-food').onclick = () => { pendingBarcode = state.pendingCode ?? null; };
-    document.getElementById('online-search')?.addEventListener('click', () => search({ online: true }));
     document.getElementById('quick-form').onsubmit = async (ev) => {
       ev.preventDefault();
       const f = new FormData(ev.target);
@@ -1617,9 +1617,9 @@ function viewFoodAdd(date, meal) {
     };
     view.onclick = onclick;
   };
-  // Shop products: the offline Polish list first (instant, works without internet),
-  // the Open Food Facts API when the list has nothing or the user asks for more.
-  const search = async ({ online = false } = {}) => {
+  // Shop products: the offline Polish list (instant, works without internet). OFF's name
+  // search does not allow browser calls (no CORS), so online we only look up barcodes.
+  const search = async () => {
     state.pendingCode = null;
     state.local = false;
     if (state.tab === 'mine' || !state.query) return draw();
@@ -1632,9 +1632,9 @@ function viewFoodAdd(date, meal) {
         const hit = await localByCode(state.query) ?? await lookupBarcode(state.query).catch(() => null);
         state.results = hit ? [hit] : [];
       } else {
-        const local = online ? [] : await searchLocal(state.query);
+        const local = await searchLocal(state.query);
         state.local = local.length > 0;
-        state.results = local.length ? local : await searchOff(state.query);
+        state.results = local.length || await localCount() ? local : await searchOff(state.query);
       }
     } catch (err) {
       state.error = err.message.includes('fetch') ? 'Brak połączenia z bazą produktów.' : err.message;

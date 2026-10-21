@@ -54,7 +54,10 @@ def main(out_path, source=EXPORT_URL):
         code = (r.get('code') or '').strip()
         if not name or kcal is None or kcal > 900 or not code.isdigit():
             continue
-        brand = (r.get('brands') or '').split(',')[0].strip()
+        # The export dropped the free-text `brands` column; `brands_en` holds the display name.
+        brand = (r.get('brands') or r.get('brands_en') or '').split(',')[0].strip()
+        if brand == (r.get('brands_tags') or '').split(',')[0]:
+            brand = brand.split(':')[-1].replace('-', ' ').title()  # only a tag like "red-bull" was given
         stores = ', '.join(x.strip() for x in (r.get('stores') or '').split(',')[:3] if x.strip())
         kept.append((
             num(r.get('unique_scans_n')) or 0,
