@@ -15,6 +15,7 @@ import csv
 import gzip
 import io
 import json
+import os
 import sys
 import urllib.request
 
@@ -63,6 +64,8 @@ def main(out_path, source=EXPORT_URL):
         ))
     kept.sort(key=lambda x: -x[0])
     products = sorted((p for _, p in kept[:LIMIT]), key=lambda p: p[0])
+    # app/data/ is gitignored, so it does not exist in a fresh checkout
+    os.makedirs(os.path.dirname(out_path) or '.', exist_ok=True)
     with open(out_path, 'w', encoding='utf-8') as f:
         f.write('[\n')
         f.write(',\n'.join(json.dumps(p, ensure_ascii=False, separators=(',', ':')) for p in products))
