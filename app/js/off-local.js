@@ -8,8 +8,10 @@ let loading = null;
 let products = null;
 let byCode = null;
 
-function toFood([code, name, brand, kcal, p, f, c, servingG, stores]) {
-  return { source: 'off', code, name, brand: brand || null, stores: stores || null, per100: { kcal, p, f, c }, servingG: servingG || null };
+// Rows: [code, name, brand, kcal, p, f, c, servingG, stores, scans, fibre, sugars, saturated fat, salt].
+function toFood([code, name, brand, kcal, p, f, c, servingG, stores, , fib, sug, sat, salt]) {
+  const micros = Object.fromEntries(Object.entries({ fib, sug, sat, salt }).filter(([, v]) => v != null));
+  return { source: 'off', code, name, brand: brand || null, stores: stores || null, per100: { kcal, p, f, c, ...micros }, servingG: servingG || null };
 }
 
 export function loadLocal() {
