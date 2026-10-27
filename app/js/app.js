@@ -2800,7 +2800,7 @@ function viewSteps() {
 }
 
 // Link iCloud do gotowego skrótu (Skróty → Udostępnij → Kopiuj łącze iCloud). Pusty: tylko instrukcja.
-const SHORTCUT_URL = '';
+const SHORTCUT_URL = 'https://www.icloud.com/shortcuts/c668de3fa330409ea11f7766ddea2628';
 const SHORTCUT_TEXT = 'kroki= kcal= waga=';
 
 function viewShortcut() {
