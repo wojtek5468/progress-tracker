@@ -6,7 +6,9 @@
 //               sends an empty push at those times; the phone shows the text it keeps itself.
 // Free plan: KV (1 GB, 100k reads and 1k writes a day) and cron triggers. Deploy: README.md.
 
-const ALLOWED_ORIGINS = ['https://wojtek5468.github.io', 'http://localhost:8000', 'http://localhost:8765'];
+const ALLOWED_ORIGINS = ['https://wojtek5468.github.io'];
+// Any local copy of the app, for development and the browser tests.
+const allowed = (origin) => ALLOWED_ORIGINS.includes(origin) || /^http:\/\/localhost(:\d+)?$/.test(origin ?? '');
 const CONTACT = 'https://github.com/wojtek5468/progress-tracker';
 const MAX_BOX = 20 * 1024 * 1024;
 const MAX_DROP = 20 * 1024 * 1024;
@@ -23,7 +25,7 @@ const sha = async (text) => b64u(await crypto.subtle.digest('SHA-256', enc.encod
 function cors(request) {
   const origin = request.headers.get('Origin');
   return {
-    'Access-Control-Allow-Origin': ALLOWED_ORIGINS.includes(origin) ? origin : ALLOWED_ORIGINS[0],
+    'Access-Control-Allow-Origin': allowed(origin) ? origin : ALLOWED_ORIGINS[0],
     'Access-Control-Allow-Methods': 'GET, PUT, DELETE, OPTIONS',
     'Access-Control-Allow-Headers': 'Authorization, Content-Type, X-Base-Version',
     'Access-Control-Expose-Headers': 'X-Version',
