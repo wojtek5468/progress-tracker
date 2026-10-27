@@ -1,5 +1,5 @@
 // Offline-first cache for the app shell. Bump VERSION when shipping changes.
-const VERSION = 'v18';
+const VERSION = 'v19';
 const SHELL = [
   './', 'index.html', 'styles.css', 'manifest.webmanifest',
   'js/app.js', 'js/db.js', 'js/icons.js', 'js/exercise-catalog.js', 'js/nutrition.js', 'js/foods-api.js', 'js/plan-templates.js', 'js/plan-templates-coach.js', 'js/recipes.js', 'js/usda-pl.js', 'js/scanner.js', 'js/off-local.js', 'js/training.js', 'js/search.js', 'js/migrate.js', 'js/health-text.js', 'js/importers.js', 'js/measures.js', 'js/core.js', 'js/training-plus.js', 'js/exercise-media.js', 'js/muscle-map.js', 'js/views-training.js', 'js/views-diet.js', 'js/diet-plus.js', 'js/food-match.js', 'js/crypto-box.js', 'js/cloud.js', 'js/views-platform.js', 'js/views-extra.js', 'js/challenges.js', 'vendor/qrcode/qrcode.mjs',
@@ -67,8 +67,10 @@ async function dueReminder() {
   const minute = now.getHours() * 60 + now.getMinutes();
   const due = (list ?? []).map((r) => {
     const [h, m] = r.time.split(':').map(Number);
-    return { r, diff: minute - (h * 60 + m) };
-  }).filter((x) => x.diff >= 0 && x.diff < 30 && x.r.days.includes(day)).sort((a, b) => a.diff - b.diff)[0];
+    const raw = minute - (h * 60 + m);
+    // Just after midnight a late reminder belongs to the day before.
+    return { r, diff: (raw + 1440) % 1440, day: raw < 0 ? ((day + 5) % 7) + 1 : day };
+  }).filter((x) => x.diff < 30 && x.r.days.includes(x.day)).sort((a, b) => a.diff - b.diff)[0];
   return due?.r ?? { title: 'Progress', body: 'Masz przypomnienie w aplikacji.', url: '#/today' };
 }
 

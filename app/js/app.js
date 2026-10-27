@@ -24,7 +24,7 @@ import {
 } from './views-diet.js';
 import { waterGoalMl } from './diet-plus.js';
 import { viewCloud, viewReceive, viewReport, viewReportShared } from './views-platform.js';
-import { startAutoSync, setTempCloudUrl, cloudUrl } from './cloud.js';
+import { startAutoSync, setTempCloudUrl, cloudUrl, syncConflict } from './cloud.js';
 import {
   viewChallenges, viewChallenge, viewChallengeJoin, challengesToday, viewWrapped, equipmentSettings, bindEquipmentSettings, adaptToEquipment,
 } from './views-extra.js';
@@ -237,6 +237,7 @@ function ring(value, goal, color, label, unit) {
 async function viewToday() {
   const draft = await db.get('draft');
   const backupDays = await backupDue();
+  const conflict = await syncConflict();
   const cw = currentWeek();
   const today = todayIso();
   const logs = data.dailyLogs ?? [];
@@ -274,6 +275,7 @@ async function viewToday() {
       <p>${backupDays === Infinity ? 'Nie masz jeszcze kopii danych.' : `Ostatnia kopia danych: ${backupDays} dni temu.`} Dane są tylko na tym telefonie; kopia w Plikach (iCloud) chroni je przed utratą.</p>
       <div class="notice-actions"><button class="btn" id="backup-now">${icon('download', 'icon-sm')} Zapisz kopię</button><button class="btn secondary" id="backup-later">Później</button></div>
     </div>` : ''}
+    ${conflict ? `<a class="card notice" href="#/cloud" style="display:block;color:inherit;text-decoration:none"><p>${icon('refresh-cw', 'icon-xs')} Dane zmieniły się tu i na innym urządzeniu, więc synchronizacja czeka. Stuknij i wybierz, którą wersję zostawić.</p></a>` : ''}
     ${reviewDue() ? `<a class="list row" href="#/review">${icon('calendar-check', 'icon-sm')}<div class="grow"><div class="title">Przegląd tygodnia</div>
       <div class="sub">Podsumowanie i propozycje na kolejny tydzień</div></div><span class="chev">${icon('chevron-right', 'icon-sm')}</span></a>` : ''}
     <div class="card hero">
@@ -3016,7 +3018,7 @@ async function start() {
   backBtn.innerHTML = icon('chevron-left');
   document.getElementById('settings-link').innerHTML = icon('settings');
   setData(await db.get('data'));
-  if (data) startAutoSync((r) => { if (r.status === 'pulled') route(); });
+  startAutoSync((r) => { if (r.status === 'pulled' || (r.status === 'conflict' && /^#\/today|^$/.test(location.hash))) route(); });
   window.addEventListener('hashchange', route);
   route();
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');

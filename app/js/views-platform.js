@@ -6,7 +6,7 @@ import qrcode from '../vendor/qrcode/qrcode.mjs';
 import { scanBarcode } from './scanner.js';
 import {
   cloudUrl, syncState, enableSync, disableSync, syncNow, adoptRemote, describe, sendTransfer, receiveTransfer, replaceData,
-  REMINDERS, pushSupported, reminderList, savePush, testPush,
+  REMINDERS, pushSupported, startAutoSync, reminderList, savePush, testPush,
 } from './cloud.js';
 import { encodeData, decodeData } from './importers.js';
 import { weightTrend, defaultTrainingDays } from './nutrition.js';
@@ -93,6 +93,7 @@ export async function viewCloud() {
     const btn = ev.target.querySelector('button');
     busy(btn, async () => {
       const found = await enableSync(ev.target.pass.value);
+      startAutoSync();
       if (found) {
         const theirs = confirm(`Pod tym hasłem są już dane z innego urządzenia: ${describe(found.remote)}.\n\nOK = pobierz je na ten telefon (zastąpią obecne: ${describe(data)})\nAnuluj = zostaw dane z tego telefonu i wyślij je`);
         if (theirs) {
@@ -165,7 +166,7 @@ export async function viewCloud() {
 export async function viewReceive(code) {
   render('Odbieranie danych', '<div class="card"><p>Pobieram i odszyfrowuję…</p></div>', { back: '#/settings' });
   try {
-    const incoming = await receiveTransfer(code);
+    const { incoming, done } = await receiveTransfer(code);
     render('Odbieranie danych', `
       <div class="card"><p>Dane z drugiego telefonu: ${describe(incoming)}.</p>
       ${data ? '<p class="small error-text" style="margin-top:6px">Zastąpią dane, które są teraz na tym telefonie.</p>' : ''}</div>
@@ -173,6 +174,8 @@ export async function viewReceive(code) {
     `, { back: '#/settings' });
     document.getElementById('accept').onclick = async () => {
       await replaceData(incoming);
+      await done();
+      startAutoSync();
       location.hash = '#/today';
     };
   } catch (err) {

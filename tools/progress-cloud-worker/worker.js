@@ -1,6 +1,7 @@
 // Cloudflare Worker for the optional cloud features of Progress. It never sees plain data:
 //  - /box/:id   end-to-end encrypted sync copy (sealed on the phone with the user's passphrase),
-//  - /drop/:id  one-time encrypted transfer to a new phone (deleted after reading or after 1 h),
+//  - /drop/:id  one-time encrypted transfer to a new phone (deleted by the new phone once it is
+//               saved there, or after 1 h),
 //  - /push      Web Push reminders: stores the subscription and reminder times, and a cron trigger
 //               sends an empty push at those times; the phone shows the text it keeps itself.
 // Free plan: KV (1 GB, 100k reads and 1k writes a day) and cron triggers. Deploy: README.md.
@@ -83,8 +84,11 @@ async function drop(request, env, id) {
   if (request.method === 'GET') {
     const value = await env.CLOUD.get(key, 'arrayBuffer');
     if (!value) return fail(404, 'gone');
-    await env.CLOUD.delete(key);
     return new Response(value, { headers: { 'Content-Type': 'application/octet-stream' } });
+  }
+  if (request.method === 'DELETE') {
+    await env.CLOUD.delete(key);
+    return json({ ok: true });
   }
   return fail(405, 'method');
 }
@@ -119,6 +123,17 @@ async function sendPush(endpoint, keys) {
 
 const validTime = (t) => /^([01]\d|2[0-3]):[0-5]\d$/.test(t);
 
+// Only real push services, so the worker cannot be used to send requests to any address.
+const PUSH_HOSTS = [/^web\.push\.apple\.com$/, /^fcm\.googleapis\.com$/, /^updates\.push\.services\.mozilla\.com$/, /\.notify\.windows\.com$/];
+export const isPushEndpoint = (endpoint) => {
+  try {
+    const u = new URL(endpoint);
+    return u.protocol === 'https:' && PUSH_HOSTS.some((re) => re.test(u.hostname));
+  } catch {
+    return false;
+  }
+};
+
 async function push(request, env, path) {
   if (path === '/push/key' && request.method === 'GET') return json({ key: (await vapid(env)).pub });
   if (path === '/push/test' && request.method === 'PUT') {
@@ -131,7 +146,7 @@ async function push(request, env, path) {
   if (path !== '/push') return fail(404, 'not found');
   const body = await request.json().catch(() => null);
   const endpoint = body?.subscription?.endpoint ?? body?.endpoint;
-  if (typeof endpoint !== 'string' || !endpoint.startsWith('https://')) return fail(400, 'endpoint');
+  if (typeof endpoint !== 'string' || !isPushEndpoint(endpoint)) return fail(400, 'endpoint');
   const key = `push:${await sha(endpoint)}`;
   if (request.method === 'DELETE') {
     await env.CLOUD.delete(key);
@@ -142,7 +157,9 @@ async function push(request, env, path) {
     .map((r) => ({ time: r.time, days: r.days.filter((d) => d >= 1 && d <= 7) }));
   let tz = 'Europe/Warsaw';
   try { tz = new Intl.DateTimeFormat('en', { timeZone: body.tz }).resolvedOptions().timeZone; } catch { /* default */ }
-  await env.CLOUD.put(key, JSON.stringify({ endpoint, reminders, tz }));
+  const value = JSON.stringify({ endpoint, reminders, tz });
+  // KV allows 1000 writes a day; an unchanged subscription costs none.
+  if (await env.CLOUD.get(key) !== value) await env.CLOUD.put(key, value);
   return json({ ok: true });
 }
 
@@ -155,10 +172,13 @@ export function localNow(date, tz) {
 }
 
 // Due when the reminder time fell within the last `window` minutes (the cron runs every 15).
+// A reminder at 23:50 is due at the 00:00 run, on the day it was set for.
 export function isDue(reminder, now, window = 15) {
   const [h, m] = reminder.time.split(':').map(Number);
-  const diff = now.minute - (h * 60 + m);
-  return diff >= 0 && diff < window && reminder.days.includes(now.day);
+  const raw = now.minute - (h * 60 + m);
+  const diff = (raw + 1440) % 1440;
+  const day = raw < 0 ? ((now.day + 5) % 7) + 1 : now.day;
+  return diff < window && reminder.days.includes(day);
 }
 
 async function runReminders(env, date = new Date()) {

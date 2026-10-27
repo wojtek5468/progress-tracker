@@ -156,7 +156,7 @@ export function viewRecipe(id, date, meal) {
     alert('Link do przepisu skopiowany.');
   };
   document.getElementById('copy-recipe')?.addEventListener('click', async () => {
-    const own = { ...sharedRecipe(r), id: uid('rec'), steps: [...(r.steps ?? [])] };
+    const own = { ...sharedRecipe(r), id: uid('rec'), steps: [...(r.steps ?? [])], items: r.items.map(({ key, name, grams, per100 }) => ({ key, name, grams, per100: { ...per100 } })) };
     delete own.v; delete own.kind;
     own.name = `${r.name} (mój)`;
     (data.recipes ??= []).push(own);
@@ -227,17 +227,18 @@ export function viewRecipeEdit(id) {
   const items = r.items.map((it) => ({ ...it }));
   document.getElementById('items').oninput = (ev) => {
     const g = ev.target.closest('[data-item]');
-    if (g) items[Number(g.dataset.item)].grams = Number(g.value.replace(',', '.')) || 0;
+    if (g && items[Number(g.dataset.item)]) items[Number(g.dataset.item)].grams = Number(g.value.replace(',', '.')) || 0;
   };
   document.getElementById('items').onclick = (ev) => {
     const del = ev.target.closest('[data-del-item]');
     if (!del) return;
-    items.splice(Number(del.dataset.delItem), 1);
+    // Rows keep their index, so a removed ingredient leaves a gap instead of shifting the rest.
+    items[Number(del.dataset.delItem)] = null;
     del.closest('.row').remove();
   };
   form.onsubmit = async (ev) => {
     ev.preventDefault();
-    const all = [...items.filter((it) => it.grams > 0), ...pending()];
+    const all = [...items.filter((it) => it?.grams > 0), ...pending()];
     if (!all.length) return alert('Dodaj co najmniej jeden składnik.');
     const values = {
       name: form.name.value.trim(), portions: Math.max(1, Number(form.portions.value) || 1), minutes: Number(form.minutes.value) || null,

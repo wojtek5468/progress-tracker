@@ -60,6 +60,9 @@ test('transfer drop is read once', async () => {
   await call(env, 'PUT', `/drop/${id}`, { body: await seal({ a: 1 }, k.key) });
   const res = await call(env, 'GET', `/drop/${id}`);
   assert.deepEqual(await open(await res.arrayBuffer(), await importKeyText(k.text)), { a: 1 });
+  // Still there until the new phone confirms it saved the data.
+  assert.equal((await call(env, 'GET', `/drop/${id}`)).status, 200);
+  await call(env, 'DELETE', `/drop/${id}`);
   assert.equal((await call(env, 'GET', `/drop/${id}`)).status, 404);
 });
 
@@ -84,4 +87,10 @@ test('push: subscription saved, VAPID key made once, reminders due in their time
   assert.equal(isDue({ time: '07:30', days: [4] }, now), false);
   assert.equal(isDue({ time: '07:15', days: [3] }, now), false);
   assert.equal(isDue({ time: '07:40', days: [3] }, now), false);
+  // 23:50 on Tuesday is sent at the 00:00 run on Wednesday.
+  assert.equal(isDue({ time: '23:50', days: [2] }, { day: 3, minute: 0 }), true);
+  assert.equal(isDue({ time: '23:50', days: [3] }, { day: 3, minute: 0 }), false);
+  // Only real push services are accepted.
+  const bad = await call(env, 'PUT', '/push', { body: JSON.stringify({ subscription: { endpoint: 'https://example.com/x' }, reminders: [] }), headers: { 'Content-Type': 'application/json' } });
+  assert.equal(bad.status, 400);
 });

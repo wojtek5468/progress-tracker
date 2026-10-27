@@ -136,7 +136,7 @@ export function viewCardio() {
       <p class="muted small" style="margin:-4px 4px 12px" id="cardio-preview"></p>
       <button class="btn" type="submit">${icon('check', 'icon-sm')} Zapisz</button>
     </form>
-    <p class="muted small" style="margin:12px 4px">Kalorie liczę z wartości MET (Compendium of Physical Activities) i Twojej wagi, jako energię ponad spoczynek, tak jak liczą zegarki. Gdy przenosisz aktywne kcal ze Zdrowia, cardio z zegarka już tam jest, więc nie dodaję go drugi raz.</p>
+    <p class="muted small" style="margin:12px 4px">Kalorie liczę z wartości MET (Compendium of Physical Activities) i Twojej wagi, jako energię ponad spoczynek, tak jak liczą zegarki. To informacja o treningu: cel kalorii nadal wynika z poziomu aktywności w profilu albo z danych ze Zdrowia, więc nic nie liczy się podwójnie.</p>
   `, { back: '#/today' });
   const form = document.getElementById('cardio-form');
   const num = (k) => {
@@ -164,11 +164,6 @@ export function viewCardio() {
     };
     (data.workoutLogs ??= []).push(log);
     data.workoutLogs.sort((a, b) => a.date.localeCompare(b.date));
-    // Without Health data the day's active kcal come from what is logged here.
-    if (data.profile.activitySource !== 'health') {
-      const day = (data.dailyLogs ??= []).find((l) => l.date === date) ?? (data.dailyLogs.push({ date }), data.dailyLogs.at(-1));
-      day.activeKcal = (day.activeKcal ?? 0) + kcal;
-    }
     await save();
     location.hash = `#/history/${log.id}`;
   };

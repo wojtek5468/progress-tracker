@@ -5,7 +5,7 @@ Jeden mały serwer dla trzech opcjonalnych funkcji aplikacji:
 - **synchronizacja** między urządzeniami: dane są szyfrowane na telefonie (AES-GCM, klucz z hasła
   przez PBKDF2), serwer trzyma tylko zaszyfrowane bajty i nie zna hasła;
 - **przeniesienie na nowy telefon** kodem QR: zaszyfrowana paczka leży na serwerze maks. godzinę
-  i znika po pierwszym odczycie;
+  i znika, gdy nowy telefon ją zapisze;
 - **przypomnienia push** (trening, ważenie, posiłki): serwer zna tylko adres powiadomień i godziny,
   wysyła puste powiadomienie, a treść podstawia telefon.
 

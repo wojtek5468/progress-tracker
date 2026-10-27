@@ -289,7 +289,9 @@ export function bindEquipmentSettings(redraw) {
     const set = new Set(data.settings.equipment ?? []);
     if (set.has(b.dataset.eq)) set.delete(b.dataset.eq);
     else set.add(b.dataset.eq);
-    data.settings.equipment = set.size ? [...set, 'bez sprzętu'].filter((x, i, a) => a.indexOf(x) === i) : [];
+    set.delete('bez sprzętu');
+    // Bodyweight exercises are always allowed; nothing chosen means a full gym.
+    data.settings.equipment = set.size ? [...set, 'bez sprzętu'] : [];
     await save();
     redraw();
   });
