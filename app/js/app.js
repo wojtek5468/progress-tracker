@@ -1932,7 +1932,7 @@ function viewExercises() {
     (groups.get(info.cat) ?? groups.get('Inne')).push({ id: e.id, ...info });
   }
   render('Ćwiczenia', `
-    <div class="card add-row"><input type="search" id="ex-search" placeholder="Szukaj ćwiczenia…" autocomplete="off"></div>
+    <div class="card add-row"><input type="search" id="ex-search" aria-label="Szukaj ćwiczenia" placeholder="Szukaj ćwiczenia…" autocomplete="off"></div>
     <div id="ex-filters">${exerciseFilters(filter)}</div>
     <a class="btn" href="#/exercise/new">${icon('plus', 'icon-sm')} Nowe ćwiczenie</a>
     <div id="ex-groups">

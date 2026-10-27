@@ -2,7 +2,6 @@
 // for a coach or dietitian.
 
 import { icon } from './icons.js';
-import qrcode from '../vendor/qrcode/qrcode.mjs';
 import { scanBarcode } from './scanner.js';
 import {
   cloudUrl, syncState, enableSync, disableSync, syncNow, adoptRemote, describe, sendTransfer, receiveTransfer, replaceData,
@@ -39,7 +38,7 @@ export async function viewCloud() {
         <button type="button" class="btn secondary" id="sync-off">Wyłącz</button></div>`
       : `<p class="small">Te same dane na iPhonie, iPadzie i Macu. Dane są szyfrowane na telefonie Twoim hasłem, więc serwer (ani nikt inny) ich nie odczyta. Bez hasła nie da się ich odzyskać.</p>
         <form id="sync-form" class="form" style="margin-top:8px">
-          <input name="pass" type="password" autocomplete="new-password" minlength="12" required placeholder="Hasło synchronizacji (min. 12 znaków)" style="width:100%;max-width:none;text-align:left">
+          <input name="pass" type="password" aria-label="Hasło synchronizacji" autocomplete="new-password" minlength="12" required placeholder="Hasło synchronizacji (min. 12 znaków)" style="width:100%;max-width:none;text-align:left">
           <button class="btn" type="submit" style="margin-top:8px" ${url ? '' : 'disabled'}>${icon('cloud', 'icon-sm')} Włącz synchronizację</button>
         </form>
         <p class="muted small" style="margin-top:8px">Na drugim urządzeniu wpisz to samo hasło. Najlepiej 4–5 losowych słów.</p>`}
@@ -57,7 +56,7 @@ export async function viewCloud() {
     ${pushSupported() ? `<div class="list form" id="reminders">
       ${Object.entries(REMINDERS).map(([id, r]) => `<div class="row"><label class="grow" style="display:flex;gap:10px;align-items:center">
         <input type="checkbox" data-rem="${id}" ${rem[id]?.on ? 'checked' : ''} style="width:auto"> ${r.label}</label>
-        <input type="time" data-rem-time="${id}" value="${rem[id]?.time ?? r.time}" style="max-width:130px"></div>`).join('')}
+        <input type="time" data-rem-time="${id}" aria-label="Godzina: ${r.label}" value="${rem[id]?.time ?? r.time}" style="max-width:130px"></div>`).join('')}
     </div>
     <div class="actions"><button type="button" class="btn" id="save-reminders" ${url ? '' : 'disabled'}>${icon('bell', 'icon-sm')} Zapisz przypomnienia</button>
       <button type="button" class="btn secondary" id="test-push" ${url ? '' : 'disabled'}>Wyślij próbne</button></div>
@@ -124,6 +123,8 @@ export async function viewCloud() {
 
   document.getElementById('send-transfer').onclick = (ev) => busy(ev.currentTarget, async () => {
     const link = await sendTransfer();
+    // Loaded only here: most people never move to a new phone.
+    const { default: qrcode } = await import('../vendor/qrcode/qrcode.mjs');
     const qr = qrcode(0, 'M');
     qr.addData(link);
     qr.make();
