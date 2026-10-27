@@ -8,7 +8,7 @@ import { data, afterSave, setData } from './core.js';
 import { checkImport } from './migrate.js';
 
 // Address of the deployed worker; can also be set in Settings → Synchronizacja.
-export const CLOUD_URL = '';
+export const CLOUD_URL = 'https://progress-cloud.wojtek5468.workers.dev';
 // Before the first start there are no settings yet; a new phone can type the address once.
 let tempUrl = null;
 export const setTempCloudUrl = (url) => { tempUrl = url; };
