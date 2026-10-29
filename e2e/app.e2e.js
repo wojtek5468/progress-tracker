@@ -120,7 +120,7 @@ test('every screen opens without errors', async () => {
   await onboard(page);
   const routes = ['#/today', '#/plans', '#/templates', '#/diet', '#/nutrition', '#/foods', '#/recipes', '#/mealplan', '#/progress', '#/review',
     '#/measure', '#/calendar', '#/cardio', '#/steps', '#/shortcut', '#/settings', '#/profile', '#/exercises', '#/photos', '#/report', '#/report/12',
-    '#/cloud', '#/challenges', '#/wrapped', '#/my-recipe/new', '#/log-free', '#/food-add/2026-10-27/lunch'];
+    '#/cloud', '#/challenges', '#/wrapped', '#/my-recipe/new', '#/log-free', '#/food-add/2026-10-27/lunch', '#/habits', '#/fasting'];
   for (const r of routes) {
     await page.go(r);
     assert.ok((await page.textContent('#view')).trim().length > 0, `${r} is empty`);
@@ -287,7 +287,7 @@ for (const colorScheme of ['light', 'dark']) {
     const problems = [];
     const routes = ['#/today', '#/plans', '#/templates', '#/diet', '#/foods', '#/recipes', '#/mealplan', '#/progress', '#/review', '#/measure',
       '#/calendar', '#/cardio', '#/steps', '#/shortcut', '#/settings', '#/profile', '#/exercises', '#/photos', '#/report', '#/cloud', '#/challenges',
-      '#/wrapped', '#/my-recipe/new', '#/log-free', '#/food-add/2026-10-27/lunch', '#/nutrition'];
+      '#/wrapped', '#/my-recipe/new', '#/log-free', '#/food-add/2026-10-27/lunch', '#/nutrition', '#/habits', '#/fasting'];
     for (const r of routes) {
       await page.go(r);
       for (const p of await page.evaluate(auditPage)) problems.push(`${r} ${p}`);
@@ -310,6 +310,26 @@ test('deleting a plan can be undone', async () => {
   await page.click('#toast button');
   await page.waitForTimeout(300);
   assert.equal(await count(), before);
+  assert.deepEqual(page.errors, []);
+  await page.context().close();
+});
+
+test('habits and fasting from the Today screen', async () => {
+  const page = await phone();
+  await onboard(page);
+  await page.go('#/habits');
+  await page.click('[data-idea="Kreatyna 5 g"]');
+  await page.go('#/fasting');
+  await page.check('#fast-on');
+  await page.go('#/today');
+  await page.click('[data-habit]');
+  await page.click('#fast-toggle');
+  await page.waitForTimeout(300);
+  const state = await page.evaluate(async () => { const c = await import('./js/core.js'); return { log: c.data.habitLog, fasting: c.data.fasting }; });
+  assert.equal(Object.values(state.log)[0].length, 1);
+  assert.ok(state.fasting.start);
+  assert.match(await page.textContent('#view'), /Post: 0 h 00 min/);
+  for (const p of await page.evaluate(auditPage)) assert.fail(p);
   assert.deepEqual(page.errors, []);
   await page.context().close();
 });

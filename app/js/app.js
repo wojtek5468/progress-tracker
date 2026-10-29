@@ -26,6 +26,8 @@ import { waterGoalMl } from './diet-plus.js';
 import { viewCloud, viewReceive, viewReport, viewReportShared } from './views-platform.js';
 import { startAutoSync, setTempCloudUrl, cloudUrl, syncConflict } from './cloud.js';
 import { toast, say, ask, askText, choose, undoable, copyText, showCopy } from './ui.js';
+import { BIG_THREE, strengthLevel, dotsHistory } from './strength.js';
+import { viewHabits, habitsToday, bindHabitsToday, viewFasting, fastingToday, bindFastingToday } from './views-habits.js';
 import {
   viewChallenges, viewChallenge, viewChallengeJoin, challengesToday, viewWrapped, equipmentSettings, bindEquipmentSettings, adaptToEquipment,
 } from './views-extra.js';
@@ -298,6 +300,8 @@ async function viewToday() {
       <div class="stat"><div class="label">${icon('moon', 'icon-sm')} Sen</div><div class="value">${sleep7 ? `${Math.floor(sleep7 / 60)}<span class="unit">h</span>${Math.round(sleep7 % 60)}` : '–'}</div></div>
       <a class="stat" href="#/progress"><div class="label">${icon('scale', 'icon-sm')} Waga</div><div class="value">${fmt(data.settings.trendOnly ? weightTrend(weightPoints()).at(-1)?.trend ?? data.profile.weightKg : data.profile.weightKg, 1)}</div></a>
     </div>
+    ${fastingToday()}
+    ${habitsToday()}
     ${challengesToday()}
     ${cw ? `<div class="section-title">Ten tydzień</div>${sessionList(cw.program, cw.week)}` : ''}
     ${lastLog ? `<a class="list row" href="#/history/${lastLog.id}">${icon('check', 'icon-sm')}
@@ -311,6 +315,8 @@ async function viewToday() {
       say(`Nie udało się zapisać kopii: ${err.message}`);
     }
   });
+  bindHabitsToday(route);
+  bindFastingToday(route);
   document.getElementById('water-quick').onclick = async () => {
     addWater(today, 250);
     await save();
@@ -720,6 +726,28 @@ function viewNutrition() {
   });
 }
 
+// Body weight on a date: the last measurement before it, or the profile weight.
+function weightAt(date) {
+  const before = weightPoints().filter((p) => p.date <= date);
+  return before.at(-1)?.value ?? weightPoints()[0]?.value ?? data.profile.weightKg;
+}
+
+// Squat, bench and deadlift against body weight, and the DOTS score with its history.
+function strengthCard() {
+  const records = data.oneRepMaxes ?? [];
+  if (!records.some((r) => BIG_THREE.some((l) => l.id === r.exerciseId))) return '';
+  const bw = weightAt(todayIso());
+  const s = strengthLevel(records, bw, data.profile.sex);
+  const history = dotsHistory(records, weightAt, data.profile.sex);
+  return `<div class="card">
+    <p>Poziom siły</p>
+    ${s.dots ? `<h2>${fmt(s.dots, 1)} <span class="muted" style="font-size:0.882rem;font-weight:500">pkt DOTS · trójbój ${fmt(s.total, 1)} kg</span></h2>` : ''}
+    <div class="strength-lifts">${s.lifts.map((l) => `<div><span class="small muted">${l.name}</span><b>${l.kg ? `${fmt(l.kg, 1)} kg` : '–'}</b><span class="small">${l.ratio ? `${fmt(l.ratio, 2)} × masa ciała` : 'brak wyniku'}</span></div>`).join('')}</div>
+    ${history.length >= 2 ? sparkline(history, 'pkt') : ''}
+    <p class="small muted" style="margin-top:6px">${s.dots ? 'DOTS porównuje siłę osób o różnej masie ciała (wzór federacji IPF). Liczony z szacowanego 1RM i aktualnej wagi.' : 'Wynik DOTS pojawi się, gdy będzie szacowany 1RM we wszystkich trzech bojach.'}</p>
+  </div>`;
+}
+
 // Line chart; with `trend` the raw points become dots and the trend is the line.
 function sparkline(points, unit, { trend = null } = {}) {
   if (points.length < 2) return '<p class="small">Za mało pomiarów na wykres.</p>';
@@ -841,6 +869,7 @@ function viewProgress() {
       <p class="small muted" style="margin-top:6px">${data.settings.trendOnly ? 'Pokazuję tylko trend (Ustawienia → Tylko trend wagi), bez dziennych wyników.' : 'Kropki to pomiary, linia to średnia wygładzona. Dzienne wahania o 1–2 kg to głównie woda.'}</p>
     </div>
     ${data.profile.goalWeightKg ? goalCard() : ''}
+    ${strengthCard()}
     <a class="card" href="#/review" style="display:block;color:inherit;text-decoration:none"><p>${icon('calendar-check', 'icon-xs')} Przegląd tygodnia</p>
       <p class="small" style="margin-top:4px">Podsumowanie ostatnich 7 dni i propozycje na kolejny tydzień.</p></a>
     <a class="card" href="#/steps" style="display:block;color:inherit;text-decoration:none">
@@ -1120,7 +1149,7 @@ function importWorkouts(workouts) {
     for (const en of w.entries) {
       if (NO_1RM_CATEGORIES.has(exInfo(en.exerciseId).cat)) continue;
       for (const x of en.sets) {
-        if (x.warmup || !(x.kg > 0 && x.reps > 0 && x.reps <= 10)) continue;
+        if (x.warmup || x.kind === 'drop' || !(x.kg > 0 && x.reps > 0 && x.reps <= 10)) continue;
         const e1rm = estimate1RM(x.kg, x.reps);
         if (e1rm > (best.get(en.exerciseId)?.e1rm ?? 0)) best.set(en.exerciseId, { e1rm, date: w.date, kg: x.kg, reps: x.reps });
       }
@@ -1341,6 +1370,7 @@ function newDraft(program, week, session) {
 
 const draftHash = (draft) => (draft.sessionKey === FREE_KEY ? '#/log-free' : `#/log/${draft.sessionKey}`);
 const FREE_KEY = 'free';
+const SET_KINDS = { drop: 'drop set', fail: 'do upadku' };
 
 // Loads the workout in progress, or starts a new one with `make` (asks before replacing another one).
 async function openDraft(key, make) {
@@ -1414,13 +1444,15 @@ function drawLog(draft, back) {
   };
 
   const setRow = (e, i, set) => {
-    // Warm-up sets are marked "R" and do not count as working sets 1, 2, 3…
-    const n = draft.entries[e].sets.slice(0, i).filter((x) => !x.warmup).length;
-    const p = !set.warmup && prevOf(draft.entries[e])?.sets[n];
+    // Warm-up (R) and drop (D) sets do not count as working sets 1, 2, 3…; to failure is U.
+    const n = draft.entries[e].sets.slice(0, i).filter((x) => !x.warmup && x.kind !== 'drop').length;
+    const p = !set.warmup && set.kind !== 'drop' && prevOf(draft.entries[e])?.sets[n];
+    const mark = set.warmup ? 'R' : set.kind === 'drop' ? 'D' : set.kind === 'fail' ? 'U' : n + 1;
+    const kindName = set.warmup ? 'rozgrzewkowa' : SET_KINDS[set.kind] ?? 'robocza';
     const prev = p ? `<span class="prev">${p.kg ? `${fmt(p.kg, 2)}×${p.reps ?? '?'}` : `${p.reps ?? '?'} powt.`}</span>` : '';
     return `
-    <div class="set-row ${set.done ? 'done' : ''} ${set.warmup ? 'warmup' : ''}">
-      <span class="set-no">${set.warmup ? 'R' : n + 1}${prev}</span>
+    <div class="set-row ${set.done ? 'done' : ''} ${set.warmup ? 'warmup' : ''} ${set.kind ? `kind-${set.kind}` : ''}">
+      <button type="button" class="set-no" data-kind="${e}/${i}" aria-label="Seria ${esc(String(mark))}, ${kindName}. Zmień rodzaj serii">${mark}${prev}</button>
       <label><input type="text" inputmode="decimal" data-e="${e}" data-s="${i}" data-f="kg" value="${set.kg ?? ''}" aria-label="Ciężar w kg"><span>kg</span></label>
       <label><input type="text" inputmode="numeric" data-e="${e}" data-s="${i}" data-f="reps" value="${set.reps ?? ''}" aria-label="Powtórzenia"><span>powt.</span></label>
       <input class="rir" type="text" inputmode="numeric" data-e="${e}" data-s="${i}" data-f="rir" value="${set.rir ?? ''}" placeholder="RIR" aria-label="RIR, powtórzenia w zapasie">
@@ -1505,6 +1537,23 @@ function drawLog(draft, back) {
       const link = ev.target.closest('[data-link]');
       const swapTo = ev.target.closest('[data-swap-to]');
       const pain = ev.target.closest('[data-pain]');
+      const kind = ev.target.closest('[data-kind]');
+      if (kind) {
+        const [e, i] = kind.dataset.kind.split('/').map(Number);
+        const set = draft.entries[e].sets[i];
+        const next = await choose('Drop set to seria zaraz po poprzedniej z mniejszym ciężarem. Nie liczy się do rekordów, ale liczy do objętości.', [
+          { label: 'Robocza', value: 'work', style: set.warmup || set.kind ? 'secondary' : '' },
+          { label: 'Rozgrzewkowa (R)', value: 'warmup', style: set.warmup ? '' : 'secondary' },
+          { label: 'Drop set (D)', value: 'drop', style: set.kind === 'drop' ? '' : 'secondary' },
+          { label: 'Do upadku (U)', value: 'fail', style: set.kind === 'fail' ? '' : 'secondary' },
+        ], { title: 'Rodzaj serii' });
+        if (!next) return;
+        set.warmup = next === 'warmup';
+        if (next === 'drop' || next === 'fail') set.kind = next;
+        else delete set.kind;
+        await persist();
+        return draw();
+      }
       if (swapTo) {
         const input = document.querySelector('#ex-pick input');
         input.value = exName(swapTo.dataset.swapTo);
@@ -1562,7 +1611,8 @@ function drawLog(draft, back) {
         const e = Number(add.dataset.add);
         const sets = draft.entries[e].sets;
         const last = [...sets].reverse().find((x) => !x.warmup) ?? sets.at(-1) ?? { kg: null, reps: null };
-        sets.push({ ...last, warmup: false, done: false });
+        const { kind: _kind, ...copy } = last;
+        sets.push({ ...copy, warmup: false, done: false });
         document.getElementById(`sets-${e}`).insertAdjacentHTML('beforeend', setRow(e, sets.length - 1, sets.at(-1)));
         persist();
       } else if (swap) {
@@ -1638,7 +1688,7 @@ async function finishLog(draft) {
     .map((en) => ({
       exerciseId: en.exerciseId,
       sets: en.sets.filter((x) => x.done && (x.kg != null || x.reps != null))
-        .map(({ kg, reps, rir, warmup }) => ({ kg, reps, ...(rir != null ? { rir } : {}), ...(warmup ? { warmup: true } : {}) })),
+        .map(({ kg, reps, rir, warmup, kind }) => ({ kg, reps, ...(rir != null ? { rir } : {}), ...(warmup ? { warmup: true } : {}), ...(kind && !warmup ? { kind } : {}) })),
       ...(en.note?.trim() ? { note: en.note.trim() } : {}),
     }))
     .filter((en) => en.sets.length);
@@ -1658,7 +1708,7 @@ async function finishLog(draft) {
   };
   for (const en of entries) {
     const best = en.sets
-      .filter((x) => !x.warmup && x.kg > 0 && x.reps > 0 && x.reps <= 10)
+      .filter((x) => !x.warmup && x.kind !== 'drop' && x.kg > 0 && x.reps > 0 && x.reps <= 10)
       .map((x) => ({ ...x, e1rm: estimate1RM(x.kg, x.reps) }))
       .sort((a, b) => b.e1rm - a.e1rm)[0];
     const prev = current1RM(en.exerciseId);
@@ -1696,7 +1746,7 @@ function viewHistory(id) {
       ${log.entries.map((en) => `
         <div class="ex">
           <div class="name">${esc(exName(en.exerciseId))}</div>
-          <div class="meta">${en.sets.map((s) => `<span class="chip${s.warmup ? ' warmup' : ''}">${s.warmup ? 'R · ' : ''}${fmt(s.kg, 2)} kg × ${s.reps ?? '?'}${s.rir != null ? ` · RIR ${s.rir}` : ''}</span>`).join('')}</div>
+          <div class="meta">${en.sets.map((s) => `<span class="chip${s.warmup ? ' warmup' : ''}">${s.warmup ? 'R · ' : s.kind === 'drop' ? 'D · ' : s.kind === 'fail' ? 'U · ' : ''}${fmt(s.kg, 2)} kg × ${s.reps ?? '?'}${s.rir != null ? ` · RIR ${s.rir}` : ''}</span>`).join('')}</div>
           ${en.note ? `<div class="desc">${esc(en.note)}</div>` : ''}
         </div>`).join('')}
     </div>
@@ -1972,7 +2022,7 @@ function exerciseHistory(id) {
   for (const l of data.workoutLogs ?? []) {
     for (const en of l.entries) {
       if (en.exerciseId !== id) continue;
-      for (const st of en.sets) if (!st.warmup && st.kg > 0 && st.reps > 0 && st.reps <= 10) put(l.date, estimate1RM(st.kg, st.reps));
+      for (const st of en.sets) if (!st.warmup && st.kind !== 'drop' && st.kg > 0 && st.reps > 0 && st.reps <= 10) put(l.date, estimate1RM(st.kg, st.reps));
     }
   }
   for (const m of data.oneRepMaxes ?? []) if (m.exerciseId === id) put(m.date, m.estimated1RM ?? m.weightKg);
@@ -2139,6 +2189,8 @@ function viewDiet(date = todayIso()) {
       <a class="row" href="#/mealplan"><span class="grow">Jadłospis i lista zakupów</span><span class="chev">${icon('chevron-right', 'icon-sm')}</span></a>
       <a class="row" href="#/recipes"><span class="grow">Przepisy</span><span class="sub">${allRecipes().length}</span><span class="chev">${icon('chevron-right', 'icon-sm')}</span></a>
       <a class="row" href="#/foods"><span class="grow">Moje produkty i posiłki</span><span class="chev">${icon('chevron-right', 'icon-sm')}</span></a>
+      <a class="row" href="#/fasting"><span class="grow">Post przerywany</span><span class="sub">${data.fasting?.on ? `${data.fasting.goalH}:${24 - data.fasting.goalH}` : 'wyłączony'}</span><span class="chev">${icon('chevron-right', 'icon-sm')}</span></a>
+      <a class="row" href="#/habits"><span class="grow">Nawyki i suplementy</span><span class="sub">${(data.habits ?? []).length || ''}</span><span class="chev">${icon('chevron-right', 'icon-sm')}</span></a>
     </div>
   `);
   view.onclick = async (ev) => {
@@ -2958,6 +3010,8 @@ const ROUTES = [
   [/^#\/photos\/(\w+)$/, viewPhotos, 'progress'],
   [/^#\/cloud$/, viewCloud, null],
   [/^#\/challenges$/, viewChallenges, 'today'],
+  [/^#\/habits$/, viewHabits, 'today'],
+  [/^#\/fasting$/, viewFasting, 'diet'],
   [/^#\/challenge\/([\w-]+)$/, viewChallenge, 'today'],
   [/^#\/challenge-join\/([\w-]+)$/, viewChallengeJoin, 'today'],
   [/^#\/wrapped$/, () => viewWrapped(), 'progress'],

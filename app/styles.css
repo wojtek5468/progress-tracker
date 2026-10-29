@@ -13,7 +13,7 @@
   --brand: #ff6b2c;
   --hero-from: #b8420c;
   --hero-to: #c94a14;
-  --good: #248a3d;
+  --good: #1f7a33;
   --on-good: #ffffff;
   --danger: #d70015;
   --protein: #e8590c;
@@ -581,3 +581,30 @@ input, select, textarea { font-size: max(16px, 1rem) !important; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 main:focus-visible { outline: none; }
 #title:focus-visible { outline: none; }
+
+/* Set type: tap the set number to change it (working, R warm-up, D drop set, U to failure). */
+button.set-no { border: 0; background: none; font: inherit; font-weight: 600; color: var(--muted); min-height: 44px; padding: 0; justify-content: center; }
+.set-row.kind-drop .set-no, .set-row.kind-fail .set-no { color: var(--carbs); }
+.strength-lifts { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 10px; }
+.strength-lifts > div { display: grid; gap: 2px; padding: 10px; border-radius: 10px; background: var(--fill); }
+.strength-lifts b { font-size: 1.059rem; }
+
+/* Habits and fasting */
+.section-link { display: flex; justify-content: space-between; align-items: center; }
+.section-link a { color: var(--accent); text-transform: none; letter-spacing: 0; font-size: 0.882rem; min-height: 32px; display: inline-flex; align-items: center; }
+.habit-chips { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+.habit-chip { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; padding: 0 14px; border: 0; border-radius: 22px; background: var(--card); color: var(--text); font: inherit; font-size: 0.941rem; }
+.habit-chip.on { background: var(--good); color: var(--on-good); }
+.habit-chip svg { flex: none; }
+.habit-days { display: flex; gap: 3px; margin-top: 6px; }
+.habit-days i { width: 12px; height: 12px; border-radius: 3px; background: var(--track); }
+.habit-days i.on { background: var(--good); }
+.fast-card { display: flex; align-items: center; gap: 12px; }
+.fast-card svg { width: 52px; height: 52px; flex: none; }
+.fast-card circle { fill: none; stroke-width: 6; stroke-linecap: round; }
+.fast-card circle.track { stroke: var(--track); }
+.fast-card circle.fill { stroke: var(--carbs); }
+.fast-card .title { font-weight: 600; }
+.fast-btn { width: auto; min-height: 44px; padding: 0 14px; font-size: 0.941rem; }
+.toggle-row input[type=checkbox] { width: 24px; height: 24px; accent-color: var(--accent); }
+.ideas .chip { background: var(--card); min-height: 36px; padding: 6px 12px; border: 0; font: inherit; font-size: 0.882rem; color: var(--text); }
