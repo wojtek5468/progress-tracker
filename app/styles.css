@@ -200,7 +200,7 @@ details.list li + li { margin-top: 4px; }
 .spark text { fill: var(--muted); font-size: 0.647rem; }
 
 .empty { text-align: center; padding: 48px 16px; color: var(--muted); }
-.empty .icon { width: 44px; height: 44px; color: var(--accent); margin-bottom: 12px; }
+.empty .icon { width: 88px; height: 88px; padding: 22px; border-radius: 50%; background: var(--accent-soft); color: var(--accent); margin-bottom: 16px; }
 .empty h2 { color: var(--text); margin: 0 0 8px; }
 .empty p { margin: 0 0 20px; }
 
@@ -325,7 +325,7 @@ button.row.food-row { width: 100%; border: 0; background: none; font: inherit; c
 .bar.thin > span { background: var(--good); }
 .stat .sub { margin-top: 6px; }
 .bars { width: 100%; height: 120px; display: block; margin-top: 10px; }
-.bars rect { fill: var(--accent-soft); }
+.bars rect { fill: color-mix(in srgb, var(--accent) 45%, var(--card)); }
 .bars rect.hit { fill: var(--accent); }
 .bars line.goal { stroke: var(--muted); stroke-dasharray: 4 4; stroke-width: 1; }
 .bars text { font-size: 0.647rem; fill: var(--muted); }
@@ -625,3 +625,32 @@ button.link-row { width: 100%; border: 0; background: none; font: inherit; color
 .whats-new { list-style: none; margin: 0 0 16px; padding: 0; display: grid; gap: 12px; }
 .whats-new li { display: flex; gap: 12px; align-items: flex-start; }
 .whats-new .icon-sm { color: var(--accent); margin-top: 2px; }
+
+/* Screen changes (View Transitions): the content cross-fades with a short slide, bars stay. */
+.topbar { view-transition-name: topbar; }
+.tabbar { view-transition-name: tabbar; }
+::view-transition-old(root) { animation: vt-out 0.16s ease-in both; }
+::view-transition-new(root) { animation: vt-in 0.22s cubic-bezier(0.2, 0.9, 0.3, 1) both; }
+@keyframes vt-out { to { opacity: 0; } }
+@keyframes vt-in { from { opacity: 0; transform: translateY(8px); } }
+@media (prefers-reduced-motion: reduce) { ::view-transition-old(root), ::view-transition-new(root) { animation: none; } }
+
+/* Tap feedback */
+.btn, .row, .quick a, .quick button, .habit-chip, .feel-row button, .icon-btn, .chip { transition: transform 0.12s ease, opacity 0.12s ease; }
+.btn:active, .quick a:active, .quick button:active, .habit-chip:active, .feel-row button:active, .icon-btn:active { transform: scale(0.96); }
+a.row:active, button.row:active, a.card:active { opacity: 0.7; }
+@media (prefers-reduced-motion: reduce) { .btn:active, .quick a:active, .quick button:active, .habit-chip:active, .feel-row button:active, .icon-btn:active { transform: none; } }
+.set-row.just-done .check svg { animation: pop 0.25s ease; }
+@keyframes pop { 50% { transform: scale(1.3); } }
+@media (prefers-reduced-motion: reduce) { .set-row.just-done .check svg { animation: none; } }
+
+/* Chart touch: value under the finger */
+.chart { position: relative; touch-action: pan-y; }
+.chart-tip {
+  position: absolute; top: -6px; transform: translateX(-50%); z-index: 2;
+  padding: 4px 8px; border-radius: 8px; background: var(--toast-bg); color: var(--toast-text);
+  font-size: 0.765rem; font-weight: 600; white-space: nowrap; pointer-events: none;
+}
+.chart-dot { position: absolute; width: 10px; height: 10px; margin: -5px 0 0 -5px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 3px var(--card); pointer-events: none; }
+.chart { margin-top: 8px; } .chart > svg { margin-top: 0 !important; }
+.today-edit { display: flex; justify-content: center; margin: 8px auto 0; min-height: 44px; font-size: 0.882rem; text-decoration: none; }

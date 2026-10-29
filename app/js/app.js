@@ -234,6 +234,25 @@ function ring(value, goal, color, label, unit) {
 }
 
 // One main action for right now: the workout in progress, today's planned workout or the next meal.
+const TODAY_PARTS = { rings: 'Kalorie i białko', quick: 'Szybkie akcje', stats: 'Kroki, sen i waga', feel: 'Samopoczucie', week: 'Treningi z tego tygodnia', last: 'Ostatni trening' };
+const shown = (part) => !(data.settings.todayHidden ?? []).includes(part);
+
+function viewTodayEdit() {
+  render('Ekran Dziś', `
+    <p class="muted small" style="margin:0 4px 12px">Wybierz, co widać na ekranie Dziś. Najważniejsza akcja (trening albo posiłek) zostaje zawsze. Post i nawyki włączasz na ich ekranach.</p>
+    <div class="list">${Object.entries(TODAY_PARTS).map(([k, label]) => `<label class="row toggle-row"><span class="grow">${label}</span><input type="checkbox" data-part="${k}" ${shown(k) ? 'checked' : ''}></label>`).join('')}</div>
+  `, { back: '#/today' });
+  view.onchange = async (ev) => {
+    const k = ev.target.dataset.part;
+    if (!k) return;
+    const hidden = new Set(data.settings.todayHidden ?? []);
+    if (ev.target.checked) hidden.delete(k);
+    else hidden.add(k);
+    data.settings.todayHidden = [...hidden];
+    await save();
+  };
+}
+
 async function viewToday() {
   const draft = await db.get('draft');
   const backupDays = await backupDue();
@@ -284,11 +303,11 @@ async function viewToday() {
       ${hero.sub ? `<p class="small">${hero.sub}</p>` : ''}
       <a class="btn" href="${hero.href}">${icon(hero.icon, 'icon-sm')} ${hero.label}</a>
     </div>
-    <a class="card rings" href="#/diet">
+    ${shown('rings') ? `<a class="card rings" href="#/diet">
       ${ring(eaten.kcal, t?.kcal, 'var(--accent)', 'Kalorie', 'kcal')}
       ${ring(eaten.p, t?.protein, 'var(--good)', 'Białko', 'g')}
-    </a>
-    <div class="quick">
+    </a>` : ''}
+    <div class="quick" ${shown('quick') ? '' : 'hidden'}>
       ${hero.icon === 'plus' ? '' : `<a href="#/food-add/${today}/${meal}">${icon('apple', 'icon-sm')}<span>Posiłek</span></a>`}
       <a href="#/measure">${icon('scale', 'icon-sm')}<span>Ważenie</span></a>
       ${draft ? '' : `<a href="#/log-free">${icon('dumbbell', 'icon-sm')}<span>Bez planu</span></a>`}
@@ -296,20 +315,21 @@ async function viewToday() {
       <button type="button" id="water-quick">${icon('droplet', 'icon-sm')}<span>Woda ${fmt((dayLog(today)?.waterMl ?? 0) / 1000, 2)} l</span></button>
       ${cw ? '' : `<a href="#/templates">${icon('calendar-days', 'icon-sm')}<span>Wybierz plan</span></a>`}
     </div>
-    <div class="stats three">
+    <div class="stats three" ${shown('stats') ? '' : 'hidden'}>
       <a class="stat" href="#/steps"><div class="label">${icon('footprints', 'icon-sm')} Kroki</div><div class="value">${fmt(stepsToday)}</div>
         <div class="bar thin"><span style="width:${Math.min(100, Math.round((stepsToday ?? 0) / stepsGoal() * 100))}%"></span></div></a>
       <div class="stat"><div class="label">${icon('moon', 'icon-sm')} Sen</div><div class="value">${sleep7 ? `${Math.floor(sleep7 / 60)}<span class="unit">h</span>${Math.round(sleep7 % 60)}` : '–'}</div></div>
       <a class="stat" href="#/progress"><div class="label">${icon('scale', 'icon-sm')} Waga</div><div class="value">${fmt(data.settings.trendOnly ? weightTrend(weightPoints()).at(-1)?.trend ?? data.profile.weightKg : data.profile.weightKg, 1)}</div></a>
     </div>
-    ${feelCard(today)}
+    ${shown('feel') ? feelCard(today) : ''}
     ${fastingToday()}
     ${habitsToday()}
     ${challengesToday()}
-    ${cw ? `<div class="section-title">Ten tydzień</div>${sessionList(cw.program, cw.week)}` : ''}
-    ${lastLog ? `<a class="list row" href="#/history/${lastLog.id}">${icon('check', 'icon-sm')}
+    ${cw && shown('week') ? `<div class="section-title">Ten tydzień</div>${sessionList(cw.program, cw.week)}` : ''}
+    ${lastLog && shown('last') ? `<a class="list row" href="#/history/${lastLog.id}">${icon('check', 'icon-sm')}
       <div class="grow"><div class="title">Ostatni trening</div><div class="sub">${dateLabel(lastLog.date)} · ${esc(lastLog.title)}</div></div>
       <span class="chev">${icon('chevron-right', 'icon-sm')}</span></a>` : ''}
+    <a class="link-btn today-edit" href="#/today-edit">${icon('settings', 'icon-xs')} Dostosuj ten ekran</a>
   `);
   document.getElementById('backup-now')?.addEventListener('click', async () => {
     try {
@@ -791,12 +811,13 @@ function sparkline(points, unit, { trend = null } = {}) {
   const dots = trend ? points.map((p, i) => `<circle cx="${X(xs[i]).toFixed(1)}" cy="${Y(p.value).toFixed(1)}" r="1.8"/>`).join('') : '';
   const v = (p) => `${fmt(p.value, 1)} ${unit}`;
   const label = `Wykres od ${dateLabel(points[0].date)} do ${dateLabel(points.at(-1).date)}: z ${v(line[0])} na ${v(line.at(-1))}, najmniej ${fmt(Math.min(...line.map((p) => p.value)), 1)}, najwięcej ${fmt(Math.max(...line.map((p) => p.value)), 1)} ${unit}.`;
-  return `<svg class="spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" role="img" aria-label="${esc(label)}">
+  const pts = line.map((p) => [Math.round(X(new Date(p.date).getTime()) / w * 1000) / 10, Math.round(Y(p.value) / h * 1000) / 10, `${fmt(p.value, 1)} ${unit} · ${dateLabel(p.date)}`]);
+  return `<div class="chart" data-pts="${esc(JSON.stringify(pts))}"><svg class="spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" role="img" aria-label="${esc(label)}">
     <path class="area" d="${area}"/>${dots}<path class="line" d="${d}"/>
     <text x="${pad}" y="${h - 2}">${dateLabel(points[0].date)}</text>
     <text x="${w - pad}" y="${h - 2}" text-anchor="end">${dateLabel(points.at(-1).date)}</text>
     <text x="${pad}" y="12">${fmt(y1 - 1, 1)} ${unit}</text>
-  </svg>`;
+  </svg><i class="chart-dot" hidden></i><span class="chart-tip" hidden></span></div>`;
 }
 
 const TAPE = { waistCm: 'Talia', hipsCm: 'Biodra', chestCm: 'Klatka', armCm: 'Ramię', thighCm: 'Udo' };
@@ -1573,7 +1594,7 @@ function drawLog(draft, back) {
       <label><input type="text" inputmode="decimal" data-e="${e}" data-s="${i}" data-f="kg" value="${set.kg ?? ''}" aria-label="Ciężar w kg"><span>kg</span></label>
       <label><input type="text" inputmode="numeric" data-e="${e}" data-s="${i}" data-f="reps" value="${set.reps ?? ''}" aria-label="Powtórzenia"><span>powt.</span></label>
       <input class="rir" type="text" inputmode="numeric" data-e="${e}" data-s="${i}" data-f="rir" value="${set.rir ?? ''}" placeholder="RIR" aria-label="RIR, powtórzenia w zapasie">
-      <button type="button" class="check" data-done="${e}/${i}" aria-label="Seria wykonana">${icon('check', 'icon-sm')}</button>
+      <button type="button" class="check" data-done="${e}/${i}" aria-label="Seria wykonana" aria-pressed="${Boolean(set.done)}">${icon('check', 'icon-sm')}</button>
     </div>`;
   };
 
@@ -1718,6 +1739,9 @@ function drawLog(draft, back) {
         const set = draft.entries[e].sets[i];
         set.done = !set.done;
         done.closest('.set-row').classList.toggle('done', set.done);
+        done.closest('.set-row').classList.toggle('just-done', set.done);
+        done.setAttribute('aria-pressed', String(set.done));
+        if (set.done) navigator.vibrate?.(15);
         const en = draft.entries[e];
         // In a superset the rest comes after the last exercise of the group.
         const nextInGroup = en.group && draft.entries[e + 1]?.group === en.group;
@@ -2920,7 +2944,8 @@ function stepBars(days) {
   const gy = h - 16 - goal / max * (h - 24);
   const logged = rows.filter((r) => r.steps > 0);
   const label = `Kroki z ostatnich ${days} dni: średnio ${fmt(avg(logged.map((r) => r.steps)) ?? 0)}, cel ${fmt(goal)} osiągnięty w ${rows.filter((r) => r.steps >= goal).length} ${plural(rows.filter((r) => r.steps >= goal).length, 'dniu', 'dniach', 'dniach')}.`;
-  return `<svg class="bars" viewBox="0 0 ${w} ${h}" role="img" aria-label="${esc(label)}">
+  const pts = rows.map((r, i) => [Math.round((i * (bw + gap) + bw / 2) / w * 1000) / 10, Math.round((h - 16 - r.steps / max * (h - 24)) / h * 1000) / 10, `${fmt(r.steps)} kroków · ${dateLabel(r.date)}`]);
+  return `<div class="chart" data-pts="${esc(JSON.stringify(pts))}"><svg class="bars" viewBox="0 0 ${w} ${h}" role="img" aria-label="${esc(label)}">
     ${rows.map((r, i) => {
       const bh = r.steps / max * (h - 24);
       return `<rect x="${(i * (bw + gap)).toFixed(1)}" y="${(h - 16 - bh).toFixed(1)}" width="${bw.toFixed(1)}" height="${bh.toFixed(1)}" rx="3" class="${r.steps >= goal ? 'hit' : ''}"/>`;
@@ -2928,7 +2953,7 @@ function stepBars(days) {
     <line x1="0" x2="${w}" y1="${gy.toFixed(1)}" y2="${gy.toFixed(1)}" class="goal"/>
     <text x="0" y="${h - 2}">${dateLabel(rows[0].date)}</text>
     <text x="${w}" y="${h - 2}" text-anchor="end">dziś</text>
-  </svg>`;
+  </svg><i class="chart-dot" hidden></i><span class="chart-tip" hidden></span></div>`;
 }
 
 function viewSteps() {
@@ -3155,6 +3180,7 @@ const ROUTES = [
   [/^#\/habits$/, viewHabits, 'today'],
   [/^#\/fasting$/, viewFasting, 'diet'],
   [/^#\/search$/, viewSearch, null],
+  [/^#\/today-edit$/, viewTodayEdit, 'today'],
   [/^#\/challenge\/([\w-]+)$/, viewChallenge, 'today'],
   [/^#\/challenge-join\/([\w-]+)$/, viewChallengeJoin, 'today'],
   [/^#\/wrapped$/, () => viewWrapped(), 'progress'],
@@ -3220,6 +3246,8 @@ const WHATS_NEW = [
   ['mic', 'Posiłek można podyktować: Dieta → Dodaj → mikrofon.'],
   ['search', 'Lupa u góry szuka ćwiczeń, przepisów, planów i ustawień.'],
   ['file-down', 'Eksport treningów, pomiarów i posiłków do CSV w Ustawieniach.'],
+  ['chart-line', 'Dotknij wykresu, żeby zobaczyć wartość z danego dnia.'],
+  ['settings', 'Ekran Dziś możesz dostosować: na dole „Dostosuj ten ekran”.'],
 ];
 
 async function whatsNew() {
@@ -3231,6 +3259,29 @@ async function whatsNew() {
   info('Co nowego', `<ul class="whats-new">${WHATS_NEW.map(([ic, t]) => `<li>${icon(ic, 'icon-sm')}<span>${t}</span></li>`).join('')}</ul>`, 'Super');
 }
 
+// Touching a chart shows the value under the finger (data in data-pts as [x%, y%, label]).
+function bindChartTouch() {
+  const show = (ev) => {
+    const chart = ev.target.closest?.('.chart');
+    if (!chart) return;
+    const pts = JSON.parse(chart.dataset.pts);
+    const r = chart.getBoundingClientRect();
+    const x = (ev.clientX - r.left) / r.width * 100;
+    const p = pts.reduce((a, b) => (Math.abs(b[0] - x) < Math.abs(a[0] - x) ? b : a));
+    const tip = chart.querySelector('.chart-tip');
+    const dot = chart.querySelector('.chart-dot');
+    tip.textContent = p[2];
+    tip.hidden = dot.hidden = false;
+    tip.style.left = `${Math.min(80, Math.max(20, p[0]))}%`;
+    dot.style.left = `${p[0]}%`;
+    dot.style.top = `${p[1]}%`;
+    // A tap on a chart inside a link shows the value instead of opening the link.
+    if (ev.type === 'pointerdown') chart.closest('a')?.addEventListener('click', (e) => e.preventDefault(), { once: true });
+  };
+  document.addEventListener('pointerdown', show);
+  document.addEventListener('pointermove', (ev) => { if (ev.buttons) show(ev); });
+}
+
 async function start() {
   document.querySelectorAll('[data-icon]').forEach((el) => { el.outerHTML = icon(el.dataset.icon); });
   backBtn.innerHTML = icon('chevron-left');
@@ -3238,9 +3289,15 @@ async function start() {
   document.getElementById('search-link').innerHTML = icon('search');
   setData(await db.get('data'));
   startAutoSync((r) => { if (r.status === 'pulled' || (r.status === 'conflict' && /^#\/today|^$/.test(location.hash))) route(); });
-  window.addEventListener('hashchange', route);
+  // Screens slide in like a native app; skipped with Reduce Motion or in older Safari.
+  const calm = matchMedia('(prefers-reduced-motion: reduce)');
+  window.addEventListener('hashchange', () => {
+    if (!document.startViewTransition || calm.matches || document.querySelector('dialog[open]')) return route();
+    document.startViewTransition(() => route());
+  });
   route();
   if (data) whatsNew();
+  bindChartTouch();
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
 }
 

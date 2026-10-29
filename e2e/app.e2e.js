@@ -120,7 +120,7 @@ test('every screen opens without errors', async () => {
   await onboard(page);
   const routes = ['#/today', '#/plans', '#/templates', '#/diet', '#/nutrition', '#/foods', '#/recipes', '#/mealplan', '#/progress', '#/review',
     '#/measure', '#/calendar', '#/cardio', '#/steps', '#/shortcut', '#/settings', '#/profile', '#/exercises', '#/photos', '#/report', '#/report/12',
-    '#/cloud', '#/challenges', '#/wrapped', '#/my-recipe/new', '#/log-free', '#/food-add/2026-10-27/lunch', '#/habits', '#/fasting', '#/search'];
+    '#/cloud', '#/challenges', '#/wrapped', '#/my-recipe/new', '#/log-free', '#/food-add/2026-10-27/lunch', '#/habits', '#/fasting', '#/search', '#/today-edit'];
   for (const r of routes) {
     await page.go(r);
     assert.ok((await page.textContent('#view')).trim().length > 0, `${r} is empty`);
@@ -287,7 +287,7 @@ for (const colorScheme of ['light', 'dark']) {
     const problems = [];
     const routes = ['#/today', '#/plans', '#/templates', '#/diet', '#/foods', '#/recipes', '#/mealplan', '#/progress', '#/review', '#/measure',
       '#/calendar', '#/cardio', '#/steps', '#/shortcut', '#/settings', '#/profile', '#/exercises', '#/photos', '#/report', '#/cloud', '#/challenges',
-      '#/wrapped', '#/my-recipe/new', '#/log-free', '#/food-add/2026-10-27/lunch', '#/nutrition', '#/habits', '#/fasting', '#/search'];
+      '#/wrapped', '#/my-recipe/new', '#/log-free', '#/food-add/2026-10-27/lunch', '#/nutrition', '#/habits', '#/fasting', '#/search', '#/today-edit'];
     for (const r of routes) {
       await page.go(r);
       for (const p of await page.evaluate(auditPage)) problems.push(`${r} ${p}`);
@@ -356,6 +356,27 @@ test('how I feel today counts into readiness', async () => {
   await page.waitForSelector('#feel-change');
   assert.equal(await page.evaluate(async () => (await import('./js/core.js')).data.dailyLogs.at(-1).feel), 2);
   for (const p of await page.evaluate(auditPage)) assert.fail(p);
+  assert.deepEqual(page.errors, []);
+  await page.context().close();
+});
+
+test('Today sections can be hidden and charts show values on touch', async () => {
+  const page = await phone();
+  await onboard(page);
+  await page.go('#/today-edit');
+  await page.uncheck('[data-part="rings"]');
+  await page.go('#/today');
+  assert.equal(await page.locator('.rings').count(), 0);
+  await page.evaluate(async () => {
+    const c = await import('./js/core.js');
+    c.data.bodyMeasurements.push({ date: '2026-10-01', weightKg: 84 }, { date: '2026-10-10', weightKg: 83.2 });
+    c.data.bodyMeasurements.sort((a, b) => a.date.localeCompare(b.date));
+    await c.save();
+  });
+  await page.go('#/progress');
+  const box = await page.locator('.chart').first().boundingBox();
+  await page.mouse.click(box.x + 5, box.y + box.height / 2);
+  assert.match(await page.textContent('.chart-tip'), /kg · /);
   assert.deepEqual(page.errors, []);
   await page.context().close();
 });
