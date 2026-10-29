@@ -1,8 +1,8 @@
 // Offline-first cache for the app shell. Bump VERSION when shipping changes.
-const VERSION = 'v21';
+const VERSION = 'v22';
 const SHELL = [
   './', 'index.html', 'styles.css', 'manifest.webmanifest',
-  'js/app.js', 'js/db.js', 'js/icons.js', 'js/exercise-catalog.js', 'js/nutrition.js', 'js/foods-api.js', 'js/plan-templates.js', 'js/plan-templates-coach.js', 'js/recipes.js', 'js/usda-pl.js', 'js/scanner.js', 'js/off-local.js', 'js/training.js', 'js/search.js', 'js/migrate.js', 'js/health-text.js', 'js/importers.js', 'js/measures.js', 'js/core.js', 'js/training-plus.js', 'js/exercise-media.js', 'js/muscle-map.js', 'js/views-training.js', 'js/views-diet.js', 'js/diet-plus.js', 'js/food-match.js', 'js/crypto-box.js', 'js/cloud.js', 'js/views-platform.js', 'js/views-extra.js', 'js/challenges.js', 'vendor/qrcode/qrcode.mjs',
+  'js/app.js', 'js/db.js', 'js/icons.js', 'js/exercise-catalog.js', 'js/nutrition.js', 'js/foods-api.js', 'js/plan-templates.js', 'js/plan-templates-coach.js', 'js/recipes.js', 'js/usda-pl.js', 'js/scanner.js', 'js/off-local.js', 'js/training.js', 'js/search.js', 'js/migrate.js', 'js/health-text.js', 'js/importers.js', 'js/measures.js', 'js/core.js', 'js/training-plus.js', 'js/exercise-media.js', 'js/muscle-map.js', 'js/views-training.js', 'js/views-diet.js', 'js/diet-plus.js', 'js/food-match.js', 'js/crypto-box.js', 'js/cloud.js', 'js/views-platform.js', 'js/views-extra.js', 'js/challenges.js', 'js/ui.js', 'vendor/qrcode/qrcode.mjs',
   'vendor/zxing/zxing.min.js',
   'icons/icon.svg', 'icons/apple-touch-icon.png', 'icons/icon-192.png', 'icons/icon-512.png',
 ];

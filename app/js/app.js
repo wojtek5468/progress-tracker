@@ -25,6 +25,7 @@ import {
 import { waterGoalMl } from './diet-plus.js';
 import { viewCloud, viewReceive, viewReport, viewReportShared } from './views-platform.js';
 import { startAutoSync, setTempCloudUrl, cloudUrl, syncConflict } from './cloud.js';
+import { toast, say, ask, askText, choose, undoable, copyText, showCopy } from './ui.js';
 import {
   viewChallenges, viewChallenge, viewChallengeJoin, challengesToday, viewWrapped, equipmentSettings, bindEquipmentSettings, adaptToEquipment,
 } from './views-extra.js';
@@ -49,7 +50,7 @@ function viewEmpty() {
     </div>`);
   document.getElementById('from-phone').onclick = async () => {
     if (!cloudUrl()) {
-      const url = prompt('Adres serwera z ustawień starego telefonu (Ustawienia → Synchronizacja)')?.trim();
+      const url = await askText('Adres serwera z ustawień starego telefonu (Ustawienia → Synchronizacja)', { type: 'url', placeholder: 'https://…', ok: 'Dalej' });
       if (!url) return;
       setTempCloudUrl(url);
     }
@@ -57,9 +58,9 @@ function viewEmpty() {
     try {
       code = await scanBarcode({ qr: true });
     } catch (err) {
-      alert(err.message);
+      say(err.message);
     }
-    code ??= prompt('Wklej link z drugiego telefonu')?.trim();
+    code ??= await askText('Wklej link z drugiego telefonu', { ok: 'Dalej' });
     if (code) location.hash = `#/receive/${code.split('#/receive/').pop()}`;
   };
   document.getElementById('start-fresh').onclick = () => { location.hash = '#/welcome'; };
@@ -107,7 +108,7 @@ function viewWelcome() {
       goal: f.get('goal'), activitySource: 'manual', activityLevel: n('days') >= 4 ? 'moderate' : 'light',
     };
     if (!(profile.heightCm > 100 && profile.heightCm < 250) || !(profile.weightKg > 30 && profile.weightKg < 300)) {
-      alert('Sprawdź wzrost i wagę.');
+      say('Sprawdź wzrost i wagę.');
       return;
     }
     profile.birthYear = Number(profile.birthDate.slice(0, 4));
@@ -162,12 +163,7 @@ async function sharePlan(program, withKg) {
       if (err.name === 'AbortError') return;
     }
   }
-  try {
-    await navigator.clipboard.writeText(url);
-    alert('Link do planu skopiowany. Wklej go znajomemu w wiadomości.');
-  } catch {
-    prompt('Skopiuj link do planu:', url);
-  }
+  await copyText(url, 'Link do planu skopiowany. Wklej go znajomemu w wiadomości.');
 }
 
 async function viewPlanImport(code) {
@@ -227,7 +223,7 @@ function ring(value, goal, color, label, unit) {
   const over = goal && value > goal * 1.05;
   return `<div class="ring">
     <svg viewBox="0 0 80 80" aria-hidden="true"><circle cx="40" cy="40" r="${r}" class="track"/>
-      ${pct > 0 ? `<circle cx="40" cy="40" r="${r}" class="fill" style="stroke:${over ? '#ff3b30' : color}" stroke-dasharray="${(pct * c).toFixed(1)} ${c.toFixed(1)}" transform="rotate(-90 40 40)"/>` : ''}</svg>
+      ${pct > 0 ? `<circle cx="40" cy="40" r="${r}" class="fill" style="stroke:${over ? 'var(--danger)' : color}" stroke-dasharray="${(pct * c).toFixed(1)} ${c.toFixed(1)}" transform="rotate(-90 40 40)"/>` : ''}</svg>
     <div class="ring-text"><b>${fmt(value)}</b><span>${goal ? `z ${fmt(goal)} ${unit}` : unit}</span></div>
     <div class="ring-label">${label}</div>
   </div>`;
@@ -312,7 +308,7 @@ async function viewToday() {
     try {
       if (await exportBackup()) route();
     } catch (err) {
-      alert(`Nie udało się zapisać kopii: ${err.message}`);
+      say(`Nie udało się zapisać kopii: ${err.message}`);
     }
   });
   document.getElementById('water-quick').onclick = async () => {
@@ -348,7 +344,7 @@ function viewPlans() {
     <button class="btn secondary" id="new-program" style="margin-top:12px">${icon('plus', 'icon-sm')} Ułóż własny plan</button>
   `);
   document.getElementById('new-program').onclick = async () => {
-    const name = prompt('Nazwa planu (np. „Siła – jesień”)')?.trim();
+    const name = await askText('Nazwa planu', { title: 'Nowy plan', placeholder: 'np. Siła – jesień', ok: 'Utwórz' });
     if (!name) return;
     const program = { id: uid('plan'), name, weeks: [] };
     data.programs.push(program);
@@ -422,19 +418,19 @@ function viewProgram(programId) {
     const block = await createNextBlock(selected);
     location.hash = `#/plans/${block.id}`;
   });
-  document.getElementById('share-plan').onclick = () => sharePlan(selected, document.getElementById('share-kg').checked).catch((err) => alert(`Nie udało się przygotować linku: ${err.message}`));
+  document.getElementById('share-plan').onclick = () => sharePlan(selected, document.getElementById('share-kg').checked).catch((err) => say(`Nie udało się przygotować linku: ${err.message}`));
   document.getElementById('rename-program').onclick = async () => {
-    const name = prompt('Nowa nazwa planu', selected.name)?.trim();
+    const name = await askText('Nazwa planu', { title: 'Zmień nazwę', value: selected.name });
     if (!name) return;
     selected.name = name;
     await save();
     route();
   };
   document.getElementById('delete-program').onclick = async () => {
-    if (!confirm(`Usunąć plan „${selected.name}” razem ze wszystkimi tygodniami? Historia treningów zostaje.`)) return;
-    data.programs = data.programs.filter((p) => p !== selected);
-    if (data.settings.currentProgram === selected.id) delete data.settings.currentProgram;
-    await save();
+    await undoable(`Usunięto plan „${selected.name}”.`, () => {
+      data.programs = data.programs.filter((p) => p !== selected);
+      if (data.settings.currentProgram === selected.id) delete data.settings.currentProgram;
+    });
     location.hash = '#/plans';
   };
 }
@@ -462,7 +458,7 @@ function viewWeek(programId, number) {
 
   document.getElementById('add-session').onclick = async () => {
     const order = week.sessions.length + 1;
-    const name = prompt('Nazwa treningu (np. „Nogi”, „Góra”)', `Trening ${order}`)?.trim();
+    const name = await askText('Nazwa treningu', { title: 'Nowy trening', value: `Trening ${order}`, placeholder: 'np. Nogi, Góra', ok: 'Dodaj' });
     if (name == null) return;
     week.sessions.push({ order, name: name || null, blocks: [{ type: 'warmup', items: [] }, { type: 'main', items: [] }, { type: 'cooldown', items: [] }] });
     await save();
@@ -488,16 +484,14 @@ function viewWeek(programId, number) {
     location.hash = '#/today';
   });
   document.getElementById('label-week').onclick = async () => {
-    const label = prompt('Opis tygodnia (np. „Deload”, „Test”); puste pole usuwa opis', week.label ?? '');
+    const label = await askText('Opis tygodnia', { title: `Tydzień ${week.number}`, value: week.label ?? '', placeholder: 'np. Deload, Test', hint: 'Puste pole usuwa opis.' });
     if (label == null) return;
     week.label = label.trim() || null;
     await save();
     route();
   };
   document.getElementById('delete-week').onclick = async () => {
-    if (!confirm(`Usunąć tydzień ${week.number} z „${program.name}”? Historia treningów zostaje.`)) return;
-    program.weeks = program.weeks.filter((w) => w !== week);
-    await save();
+    await undoable(`Usunięto tydzień ${week.number}.`, () => { program.weeks = program.weeks.filter((w) => w !== week); });
     location.hash = `#/plans/${program.id}`;
   };
 }
@@ -575,17 +569,17 @@ function viewSession(programId, number, order) {
     </div>
   `, { back: `#/week/${program.id}/${week.number}` });
   document.getElementById('rename-session').onclick = async () => {
-    const name = prompt('Nazwa treningu', sessionTitle(session))?.trim();
+    const name = await askText('Nazwa treningu', { title: 'Zmień nazwę', value: sessionTitle(session) });
     if (name == null) return;
     session.name = name || null;
     await save();
     route();
   };
   document.getElementById('delete-session').onclick = async () => {
-    if (!confirm(`Usunąć „${sessionTitle(session)}” z tygodnia ${week.number}?`)) return;
-    week.sessions = week.sessions.filter((s) => s !== session);
-    week.sessions.forEach((s, i) => { s.order = i + 1; });
-    await save();
+    await undoable(`Usunięto „${sessionTitle(session)}”.`, () => {
+      week.sessions = week.sessions.filter((s) => s !== session);
+      week.sessions.forEach((s, i) => { s.order = i + 1; });
+    });
     location.hash = `#/week/${program.id}/${week.number}`;
   };
 }
@@ -740,7 +734,9 @@ function sparkline(points, unit, { trend = null } = {}) {
   const d = line.map((p, i) => `${i ? 'L' : 'M'}${X(new Date(p.date).getTime()).toFixed(1)},${Y(p.value).toFixed(1)}`).join(' ');
   const area = `${d} L${X(x1)},${h - pad} L${X(x0)},${h - pad} Z`;
   const dots = trend ? points.map((p, i) => `<circle cx="${X(xs[i]).toFixed(1)}" cy="${Y(p.value).toFixed(1)}" r="1.8"/>`).join('') : '';
-  return `<svg class="spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" role="img" aria-label="Wykres">
+  const v = (p) => `${fmt(p.value, 1)} ${unit}`;
+  const label = `Wykres od ${dateLabel(points[0].date)} do ${dateLabel(points.at(-1).date)}: z ${v(line[0])} na ${v(line.at(-1))}, najmniej ${fmt(Math.min(...line.map((p) => p.value)), 1)}, najwięcej ${fmt(Math.max(...line.map((p) => p.value)), 1)} ${unit}.`;
+  return `<svg class="spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" role="img" aria-label="${esc(label)}">
     <path class="area" d="${area}"/>${dots}<path class="line" d="${d}"/>
     <text x="${pad}" y="${h - 2}">${dateLabel(points[0].date)}</text>
     <text x="${w - pad}" y="${h - 2}" text-anchor="end">${dateLabel(points.at(-1).date)}</text>
@@ -938,19 +934,19 @@ async function viewSettings() {
     try {
       const text = await file.text();
       let workouts = workoutsFromCsv(text);
-      if (workouts[0]?.key.startsWith('strong:') && !confirm('Strong nie zapisuje jednostki. Czy ciężary w tym pliku są w kilogramach?\n\nOK = kilogramy, Anuluj = funty (lb)')) {
+      if (workouts[0]?.key.startsWith('strong:') && await choose('Strong nie zapisuje jednostki. W jakich jednostkach są ciężary w tym pliku?', [{ label: 'Kilogramy', value: 'kg' }, { label: 'Funty (lb)', value: 'lb', style: 'secondary' }], { cancel: null }) === 'lb') {
         workouts = workoutsFromCsv(text, { unit: 'lb' });
       }
       const fresh = workouts.filter((w) => !data.workoutLogs.some((l) => l.importKey === w.key));
-      if (!fresh.length) return alert('Wszystkie treningi z tego pliku są już w aplikacji.');
+      if (!fresh.length) return say('Wszystkie treningi z tego pliku są już w aplikacji.');
       const names = new Set(fresh.flatMap((w) => w.entries.map((x) => x.name)));
-      if (!confirm(`Znaleziono ${fresh.length} treningów (${dateLabel(fresh[0].date)} – ${dateLabel(fresh.at(-1).date)}), ${names.size} ćwiczeń. Zaimportować?`)) return;
+      if (!await ask(`Znaleziono ${fresh.length} treningów (${dateLabel(fresh[0].date)} – ${dateLabel(fresh.at(-1).date)}), ${names.size} ćwiczeń.`, { title: 'Import treningów', ok: 'Importuj' })) return;
       const records = importWorkouts(fresh);
       await save();
-      alert(`Zaimportowano ${fresh.length} treningów.${records ? ` Rekordy 1RM: ${records}.` : ''} Ćwiczenia bez polskiego odpowiednika mają nazwy z pliku; możesz je zmienić w Ustawienia → Ćwiczenia.`);
+      say(`Zaimportowano ${fresh.length} treningów.${records ? ` Rekordy 1RM: ${records}.` : ''} Ćwiczenia bez polskiego odpowiednika mają nazwy z pliku; możesz je zmienić w Ustawienia → Ćwiczenia.`, 'Gotowe');
       route();
     } catch (err) {
-      alert(`Nie udało się zaimportować: ${err.message}`);
+      say(`Nie udało się zaimportować: ${err.message}`);
     }
   });
   document.getElementById('export')?.addEventListener('click', async (e) => {
@@ -958,7 +954,7 @@ async function viewSettings() {
     try {
       if (await exportBackup()) route();
     } catch (err) {
-      alert(`Nie udało się zapisać kopii: ${err.message}`);
+      say(`Nie udało się zapisać kopii: ${err.message}`);
     }
   });
   document.getElementById('auto-progression')?.addEventListener('change', async (ev) => {
@@ -981,7 +977,7 @@ async function viewSettings() {
     route();
   });
   document.getElementById('reset')?.addEventListener('click', async () => {
-    if (!confirm('Usunąć wszystkie dane z tego telefonu? Tej operacji nie można cofnąć.')) return;
+    if (!await ask('Wszystkie treningi, posiłki i pomiary znikną z tego telefonu. Tej operacji nie można cofnąć.', { title: 'Usunąć wszystkie dane?', ok: 'Usuń wszystko', danger: true })) return;
     await db.del('data');
     setData(null);
     location.hash = '#/today';
@@ -1189,7 +1185,7 @@ function bindImport() {
       location.hash = '#/today';
       route();
     } catch (err) {
-      alert(`Nie udało się wczytać pliku: ${err.message}`);
+      say(`Nie udało się wczytać pliku: ${err.message}`);
     }
   });
 }
@@ -1252,7 +1248,7 @@ function startRest(seconds) {
   stopRest();
   const bar = document.createElement('div');
   bar.className = 'rest-bar';
-  bar.innerHTML = `${icon('timer')}<span class="grow">Przerwa</span><b id="rest-left"></b><button type="button" id="rest-more" aria-label="Dodaj 15 sekund">+15 s</button><button type="button" id="rest-skip">Pomiń</button>`;
+  bar.innerHTML = `${icon('timer')}<span class="grow">Przerwa</span><b id="rest-left"></b><button type="button" id="rest-more" aria-label="Dodaj 15 sekund">+15 s</button><button type="button" id="rest-skip">Pomiń</button><span class="sr-only" aria-live="assertive" id="rest-say"></span>`;
   document.body.append(bar);
   timer = { bar, until: Date.now() + seconds * 1000, beep: scheduleBeep(seconds) };
   bar.querySelector('#rest-skip').onclick = stopRest;
@@ -1268,6 +1264,7 @@ function startRest(seconds) {
     bar.querySelector('#rest-left').textContent = `${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}`;
     if (left === 0) {
       bar.classList.add('done');
+      bar.querySelector('#rest-say').textContent = 'Koniec przerwy.';
       navigator.vibrate?.([200, 100, 200]);
       clearInterval(timer.interval);
       timer.timeout = setTimeout(stopRest, 4000);
@@ -1349,7 +1346,7 @@ const FREE_KEY = 'free';
 async function openDraft(key, make) {
   let draft = await db.get('draft');
   if (draft && draft.sessionKey !== key) {
-    if (!confirm(`Masz niezakończony trening: ${draft.title}. Porzucić go i zacząć ten?`)) {
+    if (!await ask(`Masz niezakończony trening: ${draft.title}.`, { title: 'Porzucić go i zacząć ten?', ok: 'Zacznij nowy', cancel: 'Wróć do niego', danger: true })) {
       location.hash = draftHash(draft);
       return null;
     }
@@ -1518,10 +1515,10 @@ function drawLog(draft, back) {
         data.settings.pain ??= {};
         if (data.settings.pain[id]) delete data.settings.pain[id];
         else {
-          const note = prompt(`Co boli przy „${exName(id)}”? (opcjonalnie)`, '');
+          const note = await askText(`Co boli przy „${exName(id)}”?`, { title: 'Zgłoś ból', placeholder: 'opcjonalnie', ok: 'Zgłoś' });
           if (note === null) return;
-          data.settings.pain[id] = { since: todayIso(), note: note.trim() };
-          if (swapSuggestions(id).length && confirm('Zamienić to ćwiczenie na podobne, które może mniej obciążać? Dopóki ból nie minie, plan sam podstawi zamiennik.')) {
+          data.settings.pain[id] = { since: todayIso(), note };
+          if (swapSuggestions(id).length && await ask('Dopóki ból nie minie, plan sam podstawi zamiennik.', { title: 'Zamienić na podobne ćwiczenie, które mniej obciąża?', ok: 'Zamień', cancel: 'Zostaw' })) {
             swapIndex = Number(pain.dataset.pain);
           }
         }
@@ -1536,10 +1533,10 @@ function drawLog(draft, back) {
       const plates = ev.target.closest('[data-plates]');
       if (warm) {
         const en = draft.entries[Number(warm.dataset.warmup)];
-        if (!(workKg(en) > 0)) return alert('Najpierw wpisz ciężar serii roboczej.');
+        if (!(workKg(en) > 0)) return toast('Najpierw wpisz ciężar serii roboczej.');
         const first = en.sets.find((x) => !x.warmup && x.kg > 0);
         const ramp = warmupSets(first.kg, { barKg: barKg(), barbell: barbell(en) });
-        if (!ramp.length) return alert('Przy tym ciężarze osobne serie rozgrzewkowe nie są potrzebne.');
+        if (!ramp.length) return toast('Przy tym ciężarze osobne serie rozgrzewkowe nie są potrzebne.');
         en.sets.unshift(...ramp.map((x) => ({ ...x, warmup: true, done: false })));
         await persist();
         return draw();
@@ -1574,8 +1571,9 @@ function drawLog(draft, back) {
         document.querySelector('#ex-pick input').focus();
       } else if (remove) {
         const en = draft.entries[Number(remove.dataset.remove)];
-        if (en.sets.some((x) => x.done) && !confirm(`Usunąć „${exName(en.exerciseId)}” razem z wykonanymi seriami?`)) return;
-        draft.entries.splice(Number(remove.dataset.remove), 1);
+        const removed = draft.entries.splice(Number(remove.dataset.remove), 1)[0];
+        const at = Number(remove.dataset.remove);
+        toast(`Usunięto „${exName(removed.exerciseId)}”.`, { action: { label: 'Cofnij', run: async () => { draft.entries.splice(at, 0, removed); await persist(); draw(); } } });
         swapIndex = null;
         await persist();
         draw();
@@ -1588,14 +1586,14 @@ function drawLog(draft, back) {
     };
     document.getElementById('cancel-swap')?.addEventListener('click', () => { swapIndex = null; draw(); });
     document.getElementById('fit-time')?.addEventListener('click', async () => {
-      const minutes = Number(prompt(`Ile masz minut? Teraz ok. ${estimateMinutes(draft.entries)} min.`, '30'));
+      const minutes = Number(await askText('Ile masz minut?', { title: 'Zmieść w czasie', value: '30', type: 'number', inputmode: 'numeric', hint: `Teraz ok. ${estimateMinutes(draft.entries)} min.`, ok: 'Skróć' }));
       if (!(minutes > 0)) return;
-      if (estimateMinutes(draft.entries) <= minutes) return alert('Ten trening już się mieści w tym czasie.');
+      if (estimateMinutes(draft.entries) <= minutes) return toast('Ten trening już się mieści w tym czasie.');
       const r = fitToTime(draft.entries, minutes);
       draft.entries = r.entries.map(({ main, ...en }) => en);
       await persist();
       draw();
-      alert(`Gotowe: ok. ${r.minutes} min. Główne ćwiczenia zostały, dodatkowe mają po 2 serie w superseriach i krótsze przerwy${r.dropped.length ? `. Pominięte: ${r.dropped.map(exName).join(', ')}` : ''}.`);
+      say(`Ok. ${r.minutes} min. Główne ćwiczenia zostały, dodatkowe mają po 2 serie w superseriach i krótsze przerwy${r.dropped.length ? `. Pominięte: ${r.dropped.map(exName).join(', ')}` : ''}.`);
     });
     document.getElementById('lighter')?.addEventListener('click', async () => {
       draft.entries = lighterSession(draft.entries);
@@ -1623,7 +1621,7 @@ function drawLog(draft, back) {
       draw();
     };
     document.getElementById('discard').onclick = async () => {
-      if (!confirm('Porzucić ten trening? Wpisane serie zostaną usunięte.')) return;
+      if (!await ask('Wpisane serie zostaną usunięte.', { title: 'Porzucić trening?', ok: 'Porzuć', cancel: 'Trenuj dalej', danger: true })) return;
       stopRest();
       await db.del('draft');
       location.hash = '#/today';
@@ -1645,7 +1643,7 @@ async function finishLog(draft) {
     }))
     .filter((en) => en.sets.length);
   if (!entries.length) {
-    alert('Zaznacz ✓ przy wykonanych seriach, żeby zapisać trening.');
+    say('Zaznacz ✓ przy wykonanych seriach, żeby zapisać trening.');
     return;
   }
   const log = {
@@ -1705,12 +1703,12 @@ function viewHistory(id) {
     <button class="btn secondary" id="share-log">${icon('share-2', 'icon-sm')} Udostępnij podsumowanie</button>
     <button class="btn danger" id="delete-log" style="margin-top:12px">${icon('trash-2', 'icon-sm')} Usuń ten wpis</button>
   `, { back: '#/progress' });
-  document.getElementById('share-log').onclick = () => shareWorkout(log).catch((err) => alert(`Nie udało się przygotować obrazka: ${err.message}`));
+  document.getElementById('share-log').onclick = () => shareWorkout(log).catch((err) => say(`Nie udało się przygotować obrazka: ${err.message}`));
   document.getElementById('delete-log').onclick = async () => {
-    if (!confirm('Usunąć ten trening z historii?')) return;
-    data.workoutLogs = data.workoutLogs.filter((l) => l.id !== id);
-    data.oneRepMaxes = data.oneRepMaxes.filter((m) => !(m.source === 'trening' && m.date === log.date && log.records.includes(m.exerciseId)));
-    await save();
+    await undoable('Usunięto trening z historii.', () => {
+      data.workoutLogs = data.workoutLogs.filter((l) => l.id !== id);
+      data.oneRepMaxes = data.oneRepMaxes.filter((m) => !(m.source === 'trening' && m.date === log.date && log.records.includes(m.exerciseId)));
+    });
     location.hash = '#/progress';
   };
 }
@@ -1899,11 +1897,11 @@ function viewProfile() {
     data.settings.mealTargets = f.get('mealTargets') === 'on';
     data.settings.waterGoalMl = num('waterGoalMl') || null;
     if (next.goalWeightKg != null && !(next.goalWeightKg > 30 && next.goalWeightKg < 300)) {
-      alert('Sprawdź wagę docelową.');
+      say('Sprawdź wagę docelową.');
       return;
     }
     if (!(next.heightCm > 100 && next.heightCm < 250) || !(next.weightKg > 30 && next.weightKg < 300)) {
-      alert('Sprawdź wzrost i wagę.');
+      say('Sprawdź wzrost i wagę.');
       return;
     }
     next.birthYear = next.birthDate ? Number(next.birthDate.slice(0, 4)) : p.birthYear;
@@ -2059,13 +2057,13 @@ function viewExercise(rawId) {
   });
   document.getElementById('delete-ex')?.addEventListener('click', async () => {
     if (uses) {
-      alert(`To ćwiczenie jest w planach ${uses} ${uses === 1 ? 'raz' : 'razy'}. Usuń je najpierw z treningów.`);
+      say(`To ćwiczenie jest w planach ${uses} ${uses === 1 ? 'raz' : 'razy'}. Usuń je najpierw z treningów.`);
       return;
     }
-    if (!confirm(`Usunąć „${info.name}”?`)) return;
-    data.exercises = data.exercises.filter((e) => e !== ex);
-    exerciseById.delete(id);
-    await save();
+    await undoable(`Usunięto „${info.name}”.`, () => {
+      data.exercises = data.exercises.filter((e) => e !== ex);
+      exerciseById.delete(id);
+    });
     location.hash = '#/exercises';
   });
 }
@@ -2082,7 +2080,7 @@ function viewDiet(date = todayIso()) {
     const pct = goal ? Math.min(100, Math.round(eaten / goal * 100)) : 0;
     const over = goal && eaten > goal * 1.05;
     return `<div class="macro"><span>${label}</span>
-      <div class="bar"><span style="width:${pct}%;background:${over ? '#ff3b30' : color}"></span></div>
+      <div class="bar"><span style="width:${pct}%;background:${over ? 'var(--danger)' : color}"></span></div>
       <b style="text-align:right">${fmt(eaten)}${goal ? `<span class="muted small">/${fmt(goal)}</span>` : ''}</b></div>`;
   };
   const left = t ? Math.round(t.kcal - total.kcal) : null;
@@ -2162,14 +2160,14 @@ function viewDiet(date = todayIso()) {
     const btn = ev.target.closest('[data-save-meal]');
     if (!btn) return;
     const meal = btn.dataset.saveMeal;
-    const name = prompt('Nazwa posiłku (np. „Owsianka z jagodami”)', MEALS[meal])?.trim();
+    const name = await askText('Nazwa posiłku', { title: 'Zapisz posiłek', value: MEALS[meal], placeholder: 'np. Owsianka z jagodami' });
     if (!name) return;
     data.mealTemplates.push({
       id: uid('meal'), name,
       items: entries.filter((e) => e.meal === meal && !e.quick).map((e) => ({ foodId: e.foodId, grams: e.grams })),
     });
     await save();
-    alert(`Zapisano „${name}”. Znajdziesz go w zakładce „Moje” przy dodawaniu.`);
+    toast(`Zapisano „${name}”. Znajdziesz go w „Moje” przy dodawaniu.`);
   };
 }
 
@@ -2555,7 +2553,7 @@ function viewFood(idOrNew, date, meal) {
     };
     const per100 = { kcal: n('kcal'), p: n('p') ?? 0, f: n('f') ?? 0, c: n('c') ?? 0 };
     for (const k of ['fib', 'sug', 'sat', 'salt']) if (n(k) != null) per100[k] = n(k);
-    if (!(per100.kcal >= 0) || per100.kcal == null) { alert('Podaj kalorie na 100 g.'); return; }
+    if (!(per100.kcal >= 0) || per100.kcal == null) { say('Podaj kalorie na 100 g.'); return; }
     const code = String(f.get('code') ?? '').replace(/\D/g, '');
     const values = { name: String(f.get('name')).trim(), brand: String(f.get('brand')).trim() || null, per100, servingG: n('servingG'), pricePerKg: n('pricePerKg'), ...(code ? { code } : {}) };
     if (isNew) {
@@ -2570,12 +2568,11 @@ function viewFood(idOrNew, date, meal) {
     }
   };
   document.getElementById('delete-food')?.addEventListener('click', async () => {
-    if (inUse && !confirm(`Ten produkt jest w dzienniku ${inUse} razy. Usunąć go razem z tymi wpisami?`)) return;
-    if (!inUse && !confirm(`Usunąć „${food.name}”?`)) return;
-    data.foods = data.foods.filter((x) => x !== food);
-    for (const d of Object.keys(data.foodLog)) data.foodLog[d] = data.foodLog[d].filter((e) => e.foodId !== food.id);
-    for (const m of data.mealTemplates) m.items = m.items.filter((it) => it.foodId !== food.id);
-    await save();
+    await undoable(inUse ? `Usunięto „${food.name}” i ${inUse} ${plural(inUse, 'wpis', 'wpisy', 'wpisów')} z dziennika.` : `Usunięto „${food.name}”.`, () => {
+      data.foods = data.foods.filter((x) => x !== food);
+      for (const d of Object.keys(data.foodLog)) data.foodLog[d] = data.foodLog[d].filter((e) => e.foodId !== food.id);
+      for (const m of data.mealTemplates) m.items = m.items.filter((it) => it.foodId !== food.id);
+    });
     location.hash = '#/foods';
   });
 }
@@ -2625,13 +2622,13 @@ async function bindOffContribute(food) {
       }
       food.offSentAt = todayIso();
       await save();
-      alert((confirmed ? 'Zapisane w Open Food Facts. Dziękuję!' : 'Wysłane do Open Food Facts. Produkt pojawi się w bazie po chwili.')
+      say((confirmed ? 'Zapisane w Open Food Facts. Dziękuję!' : 'Wysłane do Open Food Facts. Produkt pojawi się w bazie po chwili.')
         + (photoError ? `\n\nProdukt jest zapisany, ale zdjęcie nie: ${photoError}` : ''));
       route();
     } catch (err) {
       btn.disabled = false;
       btn.textContent = 'Wyślij';
-      alert(err.message.includes('fetch') ? 'Brak połączenia z Open Food Facts. Spróbuj później.' : err.message);
+      say(err.message.includes('fetch') ? 'Brak połączenia z Open Food Facts. Spróbuj później.' : err.message);
     }
   };
 }
@@ -2669,11 +2666,10 @@ function viewFoods() {
     const ren = ev.target.closest('[data-rename-meal]');
     if (del) {
       const m = data.mealTemplates.find((x) => x.id === del.dataset.delMeal);
-      if (!confirm(`Usunąć posiłek „${m.name}”? Produkty zostają.`)) return;
-      data.mealTemplates = data.mealTemplates.filter((x) => x !== m);
+      return undoable(`Usunięto „${m.name}”.`, () => { data.mealTemplates = data.mealTemplates.filter((x) => x !== m); }).then(route);
     } else if (ren) {
       const m = data.mealTemplates.find((x) => x.id === ren.dataset.renameMeal);
-      const name = prompt('Nazwa posiłku', m.name)?.trim();
+      const name = await askText('Nazwa posiłku', { title: 'Zmień nazwę', value: m.name });
       if (!name) return;
       m.name = name;
     } else return;
@@ -2728,7 +2724,9 @@ function stepBars(days) {
   const max = Math.max(goal, ...rows.map((r) => r.steps));
   const w = 320, h = 120, gap = 4, bw = (w - gap * (days - 1)) / days;
   const gy = h - 16 - goal / max * (h - 24);
-  return `<svg class="bars" viewBox="0 0 ${w} ${h}" role="img" aria-label="Kroki">
+  const logged = rows.filter((r) => r.steps > 0);
+  const label = `Kroki z ostatnich ${days} dni: średnio ${fmt(avg(logged.map((r) => r.steps)) ?? 0)}, cel ${fmt(goal)} osiągnięty w ${rows.filter((r) => r.steps >= goal).length} ${plural(rows.filter((r) => r.steps >= goal).length, 'dniu', 'dniach', 'dniach')}.`;
+  return `<svg class="bars" viewBox="0 0 ${w} ${h}" role="img" aria-label="${esc(label)}">
     ${rows.map((r, i) => {
       const bh = r.steps / max * (h - 24);
       return `<rect x="${(i * (bw + gap)).toFixed(1)}" y="${(h - 16 - bh).toFixed(1)}" width="${bw.toFixed(1)}" height="${bh.toFixed(1)}" rx="3" class="${r.steps >= goal ? 'hit' : ''}"/>`;
@@ -2782,19 +2780,19 @@ function viewSteps() {
     try {
       text = await navigator.clipboard.readText();
     } catch {
-      text = prompt('Wklej tekst ze Skrótu (np. kroki=8500 kcal=420)');
+      text = await askText('Wklej tekst ze Skrótu', { placeholder: 'kroki=8500 kcal=420', ok: 'Zapisz' });
     }
     if (text == null) return;
     const values = parseHealthText(text);
     if (Object.values(values).every((v) => v == null)) {
       const seen = text.trim() ? `W schowku jest: „${text.trim().slice(0, 60)}”, a nie dane ze Skrótu.` : 'Schowek jest pusty.';
-      if (confirm(`${seen}\n\nNajpierw uruchom skrót „Zdrowie → Progress”. Nie masz go jeszcze? Pokazać, jak go zrobić?`)) location.hash = '#/shortcut';
+      if (await ask(`${seen}\n\nNajpierw uruchom skrót „Zdrowie → Progress”.`, { title: 'Brak danych ze Skrótu', ok: 'Jak zrobić skrót', cancel: 'Zamknij' })) location.hash = '#/shortcut';
       return;
     }
     applyHealthValues(today, values);
     await save();
     const got = [values.steps != null && 'kroki', values.activeKcal != null && 'kcal', values.sleepMin != null && 'sen', values.restingHr != null && 'tętno', values.weightKg && 'waga'].filter(Boolean);
-    alert(`Zapisano: ${got.join(', ')}.`);
+    toast(`Zapisano: ${got.join(', ')}.`);
     route();
   };
 }
@@ -2842,7 +2840,7 @@ function viewShortcut() {
       await navigator.clipboard.writeText(SHORTCUT_TEXT);
       copyBtn.textContent = 'Skopiowano';
     } catch {
-      prompt('Skopiuj ten tekst:', SHORTCUT_TEXT);
+      showCopy('Skopiuj ten tekst', SHORTCUT_TEXT);
     }
   };
 }
@@ -2916,7 +2914,7 @@ function addTemplateProgram(t) {
   for (const exId of templateExerciseIds(t)) addCatalogExercise(exId);
   const program = buildProgram(t, uid('plan'));
   const fit = adaptToEquipment(program, addCatalogExercise);
-  if (fit.swapped) alert(`Dopasowano do Twojego sprzętu: ${fit.swapped} ${plural(fit.swapped, 'ćwiczenie', 'ćwiczenia', 'ćwiczeń')} zamieniono na podobne.${fit.left ? ` ${fit.left} nadal wymaga sprzętu, którego nie masz; zamienisz je w trakcie treningu.` : ''}`);
+  if (fit.swapped) say(`Dopasowano do Twojego sprzętu: ${fit.swapped} ${plural(fit.swapped, 'ćwiczenie', 'ćwiczenia', 'ćwiczeń')} zamieniono na podobne.${fit.left ? ` ${fit.left} nadal wymaga sprzętu, którego nie masz; zamienisz je w trakcie treningu.` : ''}`);
   data.programs.push(program);
   data.settings.currentProgram = program.id;
   data.settings.currentWeek = 1;

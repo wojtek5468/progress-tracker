@@ -63,7 +63,13 @@ export function render(title, html, { back = null } = {}) {
   view.oninput = view.onclick = null;
   view.innerHTML = html;
   window.scrollTo(0, 0);
+  // A new screen: VoiceOver starts reading from its title, as in a native app.
+  if (location.hash !== lastHash) {
+    lastHash = location.hash;
+    if (document.activeElement && document.activeElement !== document.body) titleEl.focus({ preventScroll: true });
+  }
 }
+let lastHash = null;
 
 export function currentWeek() {
   const programs = data.programs.filter((p) => p.weeks.length);
