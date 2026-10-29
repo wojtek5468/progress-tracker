@@ -120,7 +120,7 @@ test('every screen opens without errors', async () => {
   await onboard(page);
   const routes = ['#/today', '#/plans', '#/templates', '#/diet', '#/nutrition', '#/foods', '#/recipes', '#/mealplan', '#/progress', '#/review',
     '#/measure', '#/calendar', '#/cardio', '#/steps', '#/shortcut', '#/settings', '#/profile', '#/exercises', '#/photos', '#/report', '#/report/12',
-    '#/cloud', '#/challenges', '#/wrapped', '#/my-recipe/new', '#/log-free', '#/food-add/2026-10-27/lunch', '#/habits', '#/fasting'];
+    '#/cloud', '#/challenges', '#/wrapped', '#/my-recipe/new', '#/log-free', '#/food-add/2026-10-27/lunch', '#/habits', '#/fasting', '#/search'];
   for (const r of routes) {
     await page.go(r);
     assert.ok((await page.textContent('#view')).trim().length > 0, `${r} is empty`);
@@ -287,7 +287,7 @@ for (const colorScheme of ['light', 'dark']) {
     const problems = [];
     const routes = ['#/today', '#/plans', '#/templates', '#/diet', '#/foods', '#/recipes', '#/mealplan', '#/progress', '#/review', '#/measure',
       '#/calendar', '#/cardio', '#/steps', '#/shortcut', '#/settings', '#/profile', '#/exercises', '#/photos', '#/report', '#/cloud', '#/challenges',
-      '#/wrapped', '#/my-recipe/new', '#/log-free', '#/food-add/2026-10-27/lunch', '#/nutrition', '#/habits', '#/fasting'];
+      '#/wrapped', '#/my-recipe/new', '#/log-free', '#/food-add/2026-10-27/lunch', '#/nutrition', '#/habits', '#/fasting', '#/search'];
     for (const r of routes) {
       await page.go(r);
       for (const p of await page.evaluate(auditPage)) problems.push(`${r} ${p}`);
@@ -329,6 +329,32 @@ test('habits and fasting from the Today screen', async () => {
   assert.equal(Object.values(state.log)[0].length, 1);
   assert.ok(state.fasting.start);
   assert.match(await page.textContent('#view'), /Post: 0 h 00 min/);
+  for (const p of await page.evaluate(auditPage)) assert.fail(p);
+  assert.deepEqual(page.errors, []);
+  await page.context().close();
+});
+
+test('search finds exercises, recipes and settings', async () => {
+  const page = await phone();
+  await onboard(page);
+  await page.click('#search-link');
+  await page.fill('#search-all input', 'przysiad');
+  assert.match(await page.textContent('#search-results'), /Przysiad ze sztangą/);
+  await page.fill('#search-all input', 'kreatyna');
+  assert.match(await page.textContent('#search-results'), /Nawyki i suplementy/);
+  await page.press('#search-all input', 'Enter');
+  await page.waitForFunction(() => location.hash === '#/habits');
+  assert.deepEqual(page.errors, []);
+  await page.context().close();
+});
+
+test('how I feel today counts into readiness', async () => {
+  const page = await phone();
+  await onboard(page);
+  await page.go('#/today');
+  await page.click('[data-feel="2"]');
+  await page.waitForSelector('#feel-change');
+  assert.equal(await page.evaluate(async () => (await import('./js/core.js')).data.dailyLogs.at(-1).feel), 2);
   for (const p of await page.evaluate(auditPage)) assert.fail(p);
   assert.deepEqual(page.errors, []);
   await page.context().close();

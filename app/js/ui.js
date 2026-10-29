@@ -85,6 +85,9 @@ function sheet({ title = '', message = '', body = '', buttons, cancelValue = nul
 
 export const say = (message, title = '') => sheet({ title, message, buttons: [{ label: 'OK', value: true }] });
 
+// A sheet with prepared HTML (e.g. a list of what is new).
+export const info = (title, html, ok = 'OK') => sheet({ title, body: html, buttons: [{ label: ok, value: true }] });
+
 // Yes/no question. `danger` colours the confirming button red.
 export const ask = (message, { title = '', ok = 'OK', cancel = 'Anuluj', danger = false } = {}) => sheet({
   title, message, cancelValue: false,

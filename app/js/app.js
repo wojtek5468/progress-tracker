@@ -25,8 +25,10 @@ import {
 import { waterGoalMl } from './diet-plus.js';
 import { viewCloud, viewReceive, viewReport, viewReportShared } from './views-platform.js';
 import { startAutoSync, setTempCloudUrl, cloudUrl, syncConflict } from './cloud.js';
-import { toast, say, ask, askText, choose, undoable, copyText, showCopy } from './ui.js';
+import { toast, say, info, ask, askText, choose, undoable, copyText, showCopy } from './ui.js';
 import { BIG_THREE, strengthLevel, dotsHistory } from './strength.js';
+import { voiceSupported, listen } from './voice.js';
+import { workoutsCsv, measurementsCsv, foodCsv } from './export-csv.js';
 import { viewHabits, habitsToday, bindHabitsToday, viewFasting, fastingToday, bindFastingToday } from './views-habits.js';
 import {
   viewChallenges, viewChallenge, viewChallengeJoin, challengesToday, viewWrapped, equipmentSettings, bindEquipmentSettings, adaptToEquipment,
@@ -300,6 +302,7 @@ async function viewToday() {
       <div class="stat"><div class="label">${icon('moon', 'icon-sm')} Sen</div><div class="value">${sleep7 ? `${Math.floor(sleep7 / 60)}<span class="unit">h</span>${Math.round(sleep7 % 60)}` : '–'}</div></div>
       <a class="stat" href="#/progress"><div class="label">${icon('scale', 'icon-sm')} Waga</div><div class="value">${fmt(data.settings.trendOnly ? weightTrend(weightPoints()).at(-1)?.trend ?? data.profile.weightKg : data.profile.weightKg, 1)}</div></a>
     </div>
+    ${feelCard(today)}
     ${fastingToday()}
     ${habitsToday()}
     ${challengesToday()}
@@ -316,6 +319,16 @@ async function viewToday() {
     }
   });
   bindHabitsToday(route);
+  view.querySelectorAll('[data-feel]').forEach((b) => b.addEventListener('click', async () => {
+    setDayValues(today, { feel: Number(b.dataset.feel) });
+    await save();
+    route();
+  }));
+  document.getElementById('feel-change')?.addEventListener('click', async () => {
+    setDayValues(today, { feel: null });
+    await save();
+    route();
+  });
   bindFastingToday(route);
   document.getElementById('water-quick').onclick = async () => {
     addWater(today, 250);
@@ -726,6 +739,20 @@ function viewNutrition() {
   });
 }
 
+const FEELINGS = [[1, 'frown', 'Źle'], [2, 'frown', 'Słabo'], [3, 'meh', 'Normalnie'], [4, 'smile', 'Dobrze'], [5, 'smile', 'Świetnie']];
+
+// "How do you feel?" on Today: one tap, counted into readiness for training.
+function feelCard(date) {
+  const feel = dayLog(date)?.feel;
+  if (feel) {
+    const [, ic, label] = FEELINGS[feel - 1];
+    return `<div class="feel-done small muted">${icon(ic, 'icon-xs')} Samopoczucie: ${label.toLowerCase()} <button type="button" class="link-btn" id="feel-change">Zmień</button></div>`;
+  }
+  return `<div class="card feel-card"><p>Jak się dziś czujesz?</p>
+    <div class="feel-row" role="group" aria-label="Samopoczucie">${FEELINGS.map(([v, ic, label]) => `<button type="button" data-feel="${v}" aria-label="${label}">${icon(ic)}<span>${label}</span></button>`).join('')}</div>
+    <p class="small muted" style="margin-top:6px">Liczy się do gotowości do treningu razem ze snem i tętnem.</p></div>`;
+}
+
 // Body weight on a date: the last measurement before it, or the profile weight.
 function weightAt(date) {
   const before = weightPoints().filter((p) => p.date <= date);
@@ -946,6 +973,9 @@ async function viewSettings() {
 <span class="grow">Wczytaj plik danych</span>${icon('upload', 'icon-sm')}<input type="file" accept="application/json,.json" id="import"></label>
       ${data ? `<label class="row"><span class="grow">Importuj historię z Hevy lub Strong (CSV)</span>${icon('file-input', 'icon-sm')}<input type="file" accept=".csv,text/csv,text/comma-separated-values" id="import-csv"></label>` : ''}
       ${data ? `<a class="row" id="export" href="#"><span class="grow">Zapisz kopię zapasową</span><span class="sub">${last ? `ostatnio ${dateLabel(last)}` : 'jeszcze nie'}</span>${icon('download', 'icon-sm')}</a>` : ''}
+      ${data ? `<button type="button" class="row link-row" data-csv="workouts"><span class="grow">Treningi do pliku CSV</span><span class="sub">format Strong</span>${icon('file-down', 'icon-sm')}</button>
+      <button type="button" class="row link-row" data-csv="measures"><span class="grow">Pomiary do pliku CSV</span>${icon('file-down', 'icon-sm')}</button>
+      <button type="button" class="row link-row" data-csv="food"><span class="grow">Dziennik posiłków do pliku CSV</span>${icon('file-down', 'icon-sm')}</button>` : ''}
     </div>
     ${data ? `<button class="btn danger" id="reset">${icon('trash-2', 'icon-sm')} Usuń dane z telefonu</button>` : ''}
     <p class="muted small" style="text-align:center;margin-top:24px">Ikony: Lucide (licencja ISC).<br>Dane są przechowywane wyłącznie na tym urządzeniu.</p>
@@ -978,6 +1008,7 @@ async function viewSettings() {
       say(`Nie udało się zaimportować: ${err.message}`);
     }
   });
+  document.querySelectorAll('[data-csv]').forEach((b) => b.addEventListener('click', () => exportCsv(b.dataset.csv).catch((err) => say(`Nie udało się zapisać pliku: ${err.message}`))));
   document.getElementById('export')?.addEventListener('click', async (e) => {
     e.preventDefault();
     try {
@@ -1170,21 +1201,36 @@ const BACKUP_EVERY_DAYS = 7;
 
 // The only copy of the data lives in Safari's storage, so the app asks for a copy every week.
 // On iPhone the share sheet offers "Zapisz w Plikach" (iCloud Drive); elsewhere the file downloads.
-async function exportBackup() {
-  const name = `progress-kopia-${todayIso()}.json`;
-  const file = new File([JSON.stringify(data)], name, { type: 'application/json' });
+// Hands a file to the share sheet (Save to Files, AirDrop…) or downloads it.
+async function shareFile(file, title) {
   if (navigator.canShare?.({ files: [file] })) {
     try {
-      await navigator.share({ files: [file], title: 'Kopia danych Progress' });
+      await navigator.share({ files: [file], title });
     } catch (err) {
       if (err.name === 'AbortError') return false;
       throw err;
     }
   } else {
-    const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(file), download: name });
+    const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(file), download: file.name });
     a.click();
     setTimeout(() => URL.revokeObjectURL(a.href), 1000);
   }
+  return true;
+}
+
+async function exportCsv(kind) {
+  const csv = kind === 'workouts' ? workoutsCsv(data.workoutLogs, exName)
+    : kind === 'measures' ? measurementsCsv(data.bodyMeasurements ?? [])
+      : foodCsv(data.foodLog, (e) => ({ name: e.quick?.name ?? foodById(e.foodId)?.name ?? '?', grams: e.quick ? null : e.grams, ...entryMacros(e) }));
+  const names = { workouts: 'treningi', measures: 'pomiary', food: 'posilki' };
+  // The BOM makes Excel read Polish letters correctly.
+  return shareFile(new File(['\ufeff', csv], `progress-${names[kind]}-${todayIso()}.csv`, { type: 'text/csv' }), 'Eksport z Progress');
+}
+
+async function exportBackup() {
+  const name = `progress-kopia-${todayIso()}.json`;
+  const file = new File([JSON.stringify(data)], name, { type: 'application/json' });
+  if (!await shareFile(file, 'Kopia danych Progress')) return false;
   await db.set('lastBackup', new Date().toISOString());
   await db.del('backupSnooze');
   return true;
@@ -1334,7 +1380,7 @@ function todayReadiness() {
   const day = dayLog(todayIso());
   const hrs = lastWithin(data.dailyLogs ?? [], 'restingHr', 30);
   const rirs = (data.workoutLogs ?? []).slice(-2).flatMap((l) => l.entries.flatMap((e) => e.sets)).map((x) => x.rir).filter((x) => x != null);
-  return readiness({ sleepMin: day?.sleepMin ?? null, restingHr: day?.restingHr ?? null, baselineHr: avg(hrs), recentRir: avg(rirs) });
+  return readiness({ sleepMin: day?.sleepMin ?? null, restingHr: day?.restingHr ?? null, baselineHr: avg(hrs), recentRir: avg(rirs), feel: day?.feel ?? null });
 }
 
 function newDraft(program, week, session) {
@@ -1406,6 +1452,77 @@ async function viewFreeLog() {
 }
 
 // Exercise names for the picker: the user's exercises plus the built-in catalog.
+// ---------- search everything ----------
+
+// Screens and settings by the words people use for them.
+const PLACES_IN_APP = [
+  ['Ustawienia', '#/settings', 'ustawienia kopia eksport import dane'],
+  ['Mój profil', '#/profile', 'profil wzrost waga cel wiek dni treningowe'],
+  ['Cel, makro i zalecenia', '#/nutrition', 'kalorie makro bialko tdee zapotrzebowanie cel'],
+  ['Synchronizacja i przypomnienia', '#/cloud', 'synchronizacja chmura przypomnienia powiadomienia nowy telefon qr'],
+  ['Pomiar wagi i obwodów', '#/measure', 'waga pomiar obwody talia'],
+  ['Kroki', '#/steps', 'kroki zdrowie skrot'],
+  ['Skrót Zdrowie', '#/shortcut', 'skrot zdrowie apple health'],
+  ['Cardio', '#/cardio', 'cardio bieg rower spacer'],
+  ['Kalendarz treningów', '#/calendar', 'kalendarz seria'],
+  ['Przegląd tygodnia', '#/review', 'przeglad tydzien podsumowanie'],
+  ['Zdjęcia sylwetki', '#/photos', 'zdjecia sylwetka przed po'],
+  ['Raport dla trenera', '#/report', 'raport trener pdf'],
+  ['Wyzwania ze znajomymi', '#/challenges', 'wyzwania znajomi'],
+  ['Mój rok w liczbach', '#/wrapped', 'rok podsumowanie'],
+  ['Jadłospis i lista zakupów', '#/mealplan', 'jadlospis zakupy lista'],
+  ['Post przerywany', '#/fasting', 'post okno zywieniowe if 16:8'],
+  ['Nawyki i suplementy', '#/habits', 'nawyki suplementy kreatyna witaminy'],
+  ['Ćwiczenia', '#/exercises', 'cwiczenia lista wlasne'],
+  ['Gotowe plany', '#/templates', 'gotowe plany szablony'],
+  ['Trening bez planu', '#/log-free', 'trening wolny bez planu'],
+];
+
+// Exercises the user trains or has in plans first, then shorter (more basic) names.
+function byPopularity(choices) {
+  const uses = new Map();
+  for (const l of data.workoutLogs) for (const e of l.entries) uses.set(e.exerciseId, (uses.get(e.exerciseId) ?? 0) + 1);
+  for (const p of data.programs) for (const w of p.weeks) for (const ss of w.sessions) for (const b of ss.blocks) for (const it of b.items) uses.set(it.exerciseId, (uses.get(it.exerciseId) ?? 0) + 1);
+  return [...choices].sort((a, b) => (uses.get(b.id) ?? 0) - (uses.get(a.id) ?? 0) || a.name.length - b.name.length);
+}
+
+function viewSearch() {
+  render('Szukaj', `
+    <form class="card add-row" id="search-all" role="search">
+      <input type="search" name="q" placeholder="Ćwiczenie, produkt, przepis, ustawienie…" autocomplete="off" enterkeyhint="search" aria-label="Szukaj w aplikacji">
+    </form>
+    <div id="search-results" aria-live="polite"></div>
+  `, { back: 'history' });
+  const input = document.querySelector('#search-all input');
+  const row = (href, title, sub, ic) => `<a class="row" href="${href}">${icon(ic, 'icon-sm')}<div class="grow"><div class="title">${esc(title)}</div>${sub ? `<div class="sub">${esc(sub)}</div>` : ''}</div><span class="chev">${icon('chevron-right', 'icon-sm')}</span></a>`;
+  const draw = () => {
+    const q = input.value.trim();
+    const out = document.getElementById('search-results');
+    if (!q) {
+      out.innerHTML = '<p class="muted small" style="margin:8px 4px">Szukaj ćwiczeń, produktów, przepisów, planów i ustawień w jednym miejscu.</p>';
+      return;
+    }
+    const groups = [
+      ['Ekrany i ustawienia', rankByText(PLACES_IN_APP, q, (x) => `${x[0]} ${x[2]}`, 5).map(([t, h]) => row(h, t, '', 'chevron-right'))],
+      ['Ćwiczenia', rankByText(byPopularity(exerciseChoices()), q, (x) => x.name, 6).map((x) => row(`#/exercise/${encodeURIComponent(x.id)}`, x.name, exInfo(x.id).cat, 'dumbbell'))],
+      ['Moje plany', rankByText(data.programs, q, (x) => x.name, 4).map((x) => row(`#/plans/${x.id}`, x.name, `${x.weeks.length} tyg.`, 'calendar-days'))],
+      ['Gotowe plany', rankByText(TEMPLATES, q, (x) => `${x.name} ${x.level} ${x.equipment}`, 4).map((x) => row(`#/template/${x.id}`, x.name, `${x.perWeek}× w tygodniu`, 'calendar-days'))],
+      ['Przepisy', rankByText(allRecipes(), q, (x) => x.name, 6).map((x) => row(`#/recipe/${x.id}`, x.name, x.own ? 'Mój przepis' : '', 'chef-hat'))],
+      ['Moje produkty', rankByText(data.foods, q, mineText, 6).map((x) => row(`#/food/${x.id}`, x.name, x.brand ?? '', 'apple'))],
+    ].filter(([, list]) => list.length);
+    out.innerHTML = groups.length
+      ? groups.map(([t, list]) => `<div class="section-title">${t}</div><div class="list">${list.join('')}</div>`).join('')
+      : `<p class="muted small" style="margin:8px 4px">Nic nie znaleziono. Produkty z bazy znajdziesz w Dieta → Dodaj.</p>`;
+  };
+  input.oninput = draw;
+  document.getElementById('search-all').onsubmit = (ev) => {
+    ev.preventDefault();
+    document.querySelector('#search-results a')?.click();
+  };
+  draw();
+  input.focus();
+}
+
 function exerciseChoices() {
   const ids = new Set([...data.exercises.map((e) => e.id), ...Object.keys(CATALOG)]);
   return [...ids].map((id) => ({ id, name: exName(id) })).sort((a, b) => a.name.localeCompare(b.name, 'pl'));
@@ -2331,8 +2448,10 @@ function viewFoodAdd(date, meal) {
   render(`Dodaj: ${label}`, `
     <form class="card add-row" id="food-search">
       <input type="search" name="q" placeholder="Szukaj produktu lub posiłku" autocomplete="off" enterkeyhint="search" aria-label="Szukaj produktu">
+      ${voiceSupported() ? `<button type="button" class="icon-btn" id="voice" aria-label="Powiedz, co zjadłeś">${icon('mic')}</button>` : ''}
       <button type="button" class="icon-btn" id="scan" aria-label="Skanuj kod kreskowy">${icon('scan-barcode')}</button>
     </form>
+    <p class="voice-live small muted" id="voice-live" aria-live="polite" hidden></p>
     <div id="food-results"></div>
     <details class="list" id="text-box">
       <summary><span class="grow">Wpisz posiłek tekstem</span><span class="chev">${icon('chevron-right', 'icon-sm')}</span></summary>
@@ -2415,6 +2534,29 @@ function viewFoodAdd(date, meal) {
       location.hash = `#/diet/${date}`;
     });
   };
+  document.getElementById('voice')?.addEventListener('click', async (ev) => {
+    const btn = ev.currentTarget;
+    const live = document.getElementById('voice-live');
+    btn.classList.add('listening');
+    live.hidden = false;
+    live.textContent = 'Słucham… powiedz np. „dwa jajka i kromka chleba”.';
+    try {
+      const text = await listen({ onPartial: (t) => { live.textContent = t; } });
+      if (!text) {
+        live.textContent = 'Nic nie usłyszałem. Spróbuj jeszcze raz.';
+        return;
+      }
+      document.getElementById('text-box').open = true;
+      const form = document.getElementById('text-form');
+      form.text.value = text;
+      live.hidden = true;
+      form.requestSubmit();
+    } catch (err) {
+      live.textContent = err.message;
+    } finally {
+      btn.classList.remove('listening');
+    }
+  });
   document.getElementById('text-form').onsubmit = async (ev) => {
     ev.preventDefault();
     textLines = await matchLines(ev.target.text.value);
@@ -3012,6 +3154,7 @@ const ROUTES = [
   [/^#\/challenges$/, viewChallenges, 'today'],
   [/^#\/habits$/, viewHabits, 'today'],
   [/^#\/fasting$/, viewFasting, 'diet'],
+  [/^#\/search$/, viewSearch, null],
   [/^#\/challenge\/([\w-]+)$/, viewChallenge, 'today'],
   [/^#\/challenge-join\/([\w-]+)$/, viewChallengeJoin, 'today'],
   [/^#\/wrapped$/, () => viewWrapped(), 'progress'],
@@ -3048,6 +3191,7 @@ function route() {
     keepAwake(false);
   }
   document.getElementById('tabbar').hidden = !data;
+  document.getElementById('search-link').hidden = !data;
   if (!data) {
     if (hash === '#/welcome') return viewWelcome();
     // A shared plan opened before the first start waits until the profile is set up.
@@ -3065,14 +3209,38 @@ function route() {
   location.hash = '#/today';
 }
 
+// Shown once after an update to people who already use the app.
+const RELEASE = '2026-11';
+const WHATS_NEW = [
+  ['undo-2', 'Usuwanie z przyciskiem <b>Cofnij</b> i wygodne panele zamiast okienek przeglądarki.'],
+  ['eye', 'Czytelniejsze kolory, a tekst rośnie razem z rozmiarem czcionki w iPhonie.'],
+  ['dumbbell', 'Stuknij numer serii, żeby oznaczyć drop set albo serię do upadku.'],
+  ['chart-line', 'Poziom siły (DOTS) w Postępach.'],
+  ['hourglass', 'Post przerywany i nawyki (np. kreatyna) do odhaczania na ekranie Dziś.'],
+  ['mic', 'Posiłek można podyktować: Dieta → Dodaj → mikrofon.'],
+  ['search', 'Lupa u góry szuka ćwiczeń, przepisów, planów i ustawień.'],
+  ['file-down', 'Eksport treningów, pomiarów i posiłków do CSV w Ustawieniach.'],
+];
+
+async function whatsNew() {
+  const seen = await db.get('seenRelease');
+  if (seen === RELEASE) return;
+  await db.set('seenRelease', RELEASE);
+  // Someone who just started does not need a list of changes.
+  if (!seen && !data.workoutLogs.length && !Object.values(data.foodLog ?? {}).some((x) => x.length)) return;
+  info('Co nowego', `<ul class="whats-new">${WHATS_NEW.map(([ic, t]) => `<li>${icon(ic, 'icon-sm')}<span>${t}</span></li>`).join('')}</ul>`, 'Super');
+}
+
 async function start() {
   document.querySelectorAll('[data-icon]').forEach((el) => { el.outerHTML = icon(el.dataset.icon); });
   backBtn.innerHTML = icon('chevron-left');
   document.getElementById('settings-link').innerHTML = icon('settings');
+  document.getElementById('search-link').innerHTML = icon('search');
   setData(await db.get('data'));
   startAutoSync((r) => { if (r.status === 'pulled' || (r.status === 'conflict' && /^#\/today|^$/.test(location.hash))) route(); });
   window.addEventListener('hashchange', route);
   route();
+  if (data) whatsNew();
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
 }
 
