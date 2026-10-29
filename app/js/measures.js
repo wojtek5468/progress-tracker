@@ -57,7 +57,7 @@ export function unitGrams(unit, name = '', servingG = null) {
 // Without a unit the quantity means pieces ("2 jajka"); "150 g ryżu" gives grams.
 export function parseMealText(text) {
   return String(text ?? '')
-    .split(/,|;|\n|\s+i\s+|\s+oraz\s+|\s+\+\s+/i)
+    .split(/,|;|\n|\s+i\s+|\s+oraz\s+|\s+\+\s+|\s+(?:a\s+)?do\s+tego\s+|\s+plus\s+|\s+potem\s+/i)
     .map((part) => part.trim())
     .filter(Boolean)
     .map((part) => {

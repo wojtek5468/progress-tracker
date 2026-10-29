@@ -2,6 +2,7 @@
 // fibre/sugar/salt, targets per meal, "Domknij makro", the weekly budget, the cost of food
 // and progress photos.
 
+import { toast, say, ask, askText, undoable, copyText } from './ui.js';
 import { icon } from './icons.js';
 import * as db from './db.js';
 import { RECIPES, INGREDIENTS, isVege } from './recipes.js';
@@ -152,8 +153,7 @@ export function viewRecipe(id, date, meal) {
     if (navigator.share) {
       try { await navigator.share({ title: r.name, text: `Przepis: ${r.name}`, url }); return; } catch (e) { if (e.name === 'AbortError') return; }
     }
-    await navigator.clipboard?.writeText(url);
-    alert('Link do przepisu skopiowany.');
+    await copyText(url, 'Link do przepisu skopiowany.');
   };
   document.getElementById('copy-recipe')?.addEventListener('click', async () => {
     const own = { ...sharedRecipe(r), id: uid('rec'), steps: [...(r.steps ?? [])], items: r.items.map(({ key, name, grams, per100 }) => ({ key, name, grams, per100: { ...per100 } })) };
@@ -239,7 +239,7 @@ export function viewRecipeEdit(id) {
   form.onsubmit = async (ev) => {
     ev.preventDefault();
     const all = [...items.filter((it) => it?.grams > 0), ...pending()];
-    if (!all.length) return alert('Dodaj co najmniej jeden składnik.');
+    if (!all.length) return say('Dodaj co najmniej jeden składnik.');
     const values = {
       name: form.name.value.trim(), portions: Math.max(1, Number(form.portions.value) || 1), minutes: Number(form.minutes.value) || null,
       meals: [...form.querySelectorAll('[name=meals]:checked')].map((x) => x.value), items: all,
@@ -260,9 +260,7 @@ export function viewRecipeEdit(id) {
     location.hash = `#/recipe/${target.id}`;
   };
   document.getElementById('delete-recipe')?.addEventListener('click', async () => {
-    if (!confirm(`Usunąć przepis „${r.name}”? Wpisy w dzienniku zostają.`)) return;
-    data.recipes = data.recipes.filter((x) => x !== r);
-    await save();
+    await undoable(`Usunięto przepis „${r.name}”.`, () => { data.recipes = data.recipes.filter((x) => x !== r); });
     location.hash = '#/recipes';
   });
 }
@@ -365,7 +363,7 @@ export function viewMealPlan(start = weekStart(todayIso())) {
       data.mealPlan[d] = data.mealPlan[d].filter((x) => x.id !== pid);
     } else if (logDay) {
       const d = logDay.dataset.logDay;
-      if (!confirm(`Wpisać jadłospis z ${dateLabel(d)} do dziennika?`)) return;
+      if (!await ask('Przepisy z tego dnia trafią do dziennika posiłków.', { title: `Wpisać jadłospis z ${dateLabel(d)}?`, ok: 'Wpisz' })) return;
       for (const x of data.mealPlan[d]) {
         const r = recipeById(x.recipeId);
         if (r) logRecipe(r, d, x.meal, x.portions);
@@ -381,7 +379,7 @@ export function viewMealPlan(start = weekStart(todayIso())) {
     const n = autoPlan(start);
     await save();
     viewMealPlan(start);
-    if (!n) alert('Wszystkie posiłki od dziś do końca tygodnia są już zaplanowane.');
+    if (!n) toast('Wszystkie posiłki od dziś do końca tygodnia są już zaplanowane.');
   };
 }
 
@@ -422,8 +420,7 @@ export function viewShopping(start = weekStart(todayIso())) {
     if (navigator.share) {
       try { await navigator.share({ title: 'Lista zakupów', text }); return; } catch (e) { if (e.name === 'AbortError') return; }
     }
-    await navigator.clipboard?.writeText(text);
-    alert('Lista skopiowana.');
+    await copyText(text, 'Lista skopiowana.');
   });
 }
 
@@ -476,7 +473,7 @@ export function microsCard(date) {
     const pct = Math.min(100, Math.round(m[k] / goal * 100));
     const bad = t[k].max ? m[k] > t[k].max : false;
     return `<div class="macro"><span>${MICROS[k].label}</span>
-      <div class="bar"><span style="width:${pct}%;background:${bad ? '#ff3b30' : t[k].min ? 'var(--good)' : 'var(--muted)'}"></span></div>
+      <div class="bar"><span style="width:${pct}%;background:${bad ? 'var(--danger)' : t[k].min ? 'var(--good)' : 'var(--muted)'}"></span></div>
       <b style="text-align:right">${fmt(m[k], 1)}<span class="muted small">/${t[k].min ? 'min ' : 'max '}${fmt(goal)}</span></b></div>`;
   };
   return `<div class="card">
@@ -651,7 +648,9 @@ export async function viewPhotos(pose = 'front') {
   document.getElementById('photo-input').onchange = async (ev) => {
     const file = ev.target.files?.[0];
     if (!file) return;
-    const date = prompt('Data zdjęcia (RRRR-MM-DD)', todayIso())?.trim() || todayIso();
+    const picked = await askText('Data zdjęcia', { type: 'date', value: todayIso(), ok: 'Dodaj' });
+    if (picked === null) return;
+    const date = /^\d{4}-\d{2}-\d{2}$/.test(picked) ? picked : todayIso();
     const all = await loadPhotos();
     all.push({ id: uid('ph'), date, pose, blob: await shrink(file) });
     await db.set(PHOTOS, all);
@@ -660,8 +659,11 @@ export async function viewPhotos(pose = 'front') {
   };
   view.onclick = async (ev) => {
     const del = ev.target.closest('[data-del-photo]');
-    if (!del || !confirm('Usunąć to zdjęcie?')) return;
-    await db.set(PHOTOS, (await loadPhotos()).filter((p) => p.id !== del.dataset.delPhoto));
+    if (!del) return;
+    const all = await loadPhotos();
+    const removed = all.find((p) => p.id === del.dataset.delPhoto);
+    await db.set(PHOTOS, all.filter((p) => p !== removed));
     viewPhotos(pose);
+    toast('Usunięto zdjęcie.', { action: { label: 'Cofnij', run: async () => { await db.set(PHOTOS, [...await loadPhotos(), removed]); viewPhotos(pose); } } });
   };
 }

@@ -29,3 +29,8 @@ test('search name is stemmed and drops measure words', () => {
   assert.equal(searchName('chleba żytniego'), 'chleb zytni');
   assert.equal(searchName('ryżu'), 'ryz');
 });
+
+test('spoken meals split on "a do tego", "plus" and "potem"', () => {
+  const parts = parseMealText('dwa jajka i kromka chleba a do tego pół banana plus kawa z mlekiem');
+  assert.deepEqual(parts.map((p) => p.name), ['jajka', 'chleba', 'banana', 'kawa z mlekiem']);
+});
