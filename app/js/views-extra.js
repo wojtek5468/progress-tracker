@@ -1,6 +1,7 @@
 // Smaller ideas from the plan: challenges between friends, the year in review picture, the
 // equipment profile and adapting ready plans to it.
 
+import { say, askText, undoable, copyText } from './ui.js';
 import { icon } from './icons.js';
 import { KINDS, progress, shareable, fromShared } from './challenges.js';
 import { encodeData, decodeData } from './importers.js';
@@ -73,7 +74,7 @@ export function viewChallenges() {
     ev.preventDefault();
     const kind = form.kind.value;
     const target = KINDS[kind].default == null ? null : Number(form.target.value);
-    if (KINDS[kind].default != null && !(target > 0)) return alert('Podaj cel.');
+    if (KINDS[kind].default != null && !(target > 0)) return say('Podaj cel.');
     const ch = { id: uid('ch'), kind, target, days: Math.max(1, Math.min(366, Number(form.days.value) || 30)), start: form.start.value || today };
     ch.name = form.name.value.trim() || KINDS[kind].name(target);
     (data.challenges ??= []).push(ch);
@@ -104,11 +105,10 @@ export function viewChallenge(id) {
     if (navigator.share) {
       try { await navigator.share({ title, text, ...(url ? { url } : {}) }); return; } catch (e) { if (e.name === 'AbortError') return; }
     }
-    await navigator.clipboard?.writeText(url ? `${text}\n${url}` : text);
-    alert('Skopiowane.');
+    await copyText(url ? `${text}\n${url}` : text);
   };
   document.getElementById('invite').onclick = async () => {
-    const from = prompt('Twoje imię (zobaczą je znajomi)', data.settings.reportName ?? '')?.trim();
+    const from = await askText('Twoje imię', { title: 'Zaproś znajomych', value: data.settings.reportName ?? '', hint: 'Zobaczą je znajomi.', ok: 'Dalej' });
     if (from == null) return;
     data.settings.reportName = from || null;
     await save();
@@ -117,9 +117,7 @@ export function viewChallenge(id) {
   };
   document.getElementById('share-result').onclick = () => share('Mój wynik', `${ch.name}: ${p.done}/${p.total} ${weekly ? 'tygodni' : 'dni'} zaliczone${p.over ? '' : ` (po ${p.elapsed})`}.`);
   document.getElementById('delete-ch').onclick = async () => {
-    if (!confirm(`Usunąć „${ch.name}”?`)) return;
-    data.challenges = data.challenges.filter((x) => x !== ch);
-    await save();
+    await undoable(`Usunięto „${ch.name}”.`, () => { data.challenges = data.challenges.filter((x) => x !== ch); });
     location.hash = '#/challenges';
   };
 }

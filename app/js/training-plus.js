@@ -205,10 +205,12 @@ export const PLATEAU_TIPS = [
   'Sprawdź sen, białko i kalorie: na redukcji utrzymanie siły to też dobry wynik.',
 ];
 
-// Readiness 0–100 from sleep (hours vs 7.5), resting heart rate vs the person's usual one
-// and how hard the last sessions felt (average RIR; 0 means to failure).
-export function readiness({ sleepMin = null, restingHr = null, baselineHr = null, recentRir = null } = {}) {
+// Readiness 0–100 from sleep (hours vs 7.5), resting heart rate vs the person's usual one,
+// how hard the last sessions felt (average RIR; 0 means to failure) and how the person says
+// they feel today (1–5).
+export function readiness({ sleepMin = null, restingHr = null, baselineHr = null, recentRir = null, feel = null } = {}) {
   const parts = [];
+  if (feel != null) parts.push((feel - 1) / 4);
   if (sleepMin != null) parts.push(Math.max(0, Math.min(1, (sleepMin / 60 - 4.5) / 3)));
   if (restingHr != null && baselineHr) parts.push(Math.max(0, Math.min(1, 1 - (restingHr - baselineHr) / 10)));
   if (recentRir != null) parts.push(Math.max(0, Math.min(1, recentRir / 2)));

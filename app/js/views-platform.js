@@ -1,6 +1,7 @@
 // Screens for the optional cloud features (sync, phone transfer, reminders) and the report
 // for a coach or dietitian.
 
+import { toast, say, ask, askText, choose, copyText } from './ui.js';
 import { icon } from './icons.js';
 import { scanBarcode } from './scanner.js';
 import {
@@ -72,7 +73,7 @@ export async function viewCloud() {
     try {
       await fn();
     } catch (err) {
-      alert(err.message);
+      say(err.message);
     } finally {
       btn.disabled = false;
       btn.innerHTML = label;
@@ -81,7 +82,7 @@ export async function viewCloud() {
 
   document.getElementById('cloud-url').onchange = async (ev) => {
     const v = ev.target.value.trim();
-    if (v && !/^https:\/\/[\w.-]+(\/.*)?$/.test(v)) return alert('Adres musi zaczynać się od https://');
+    if (v && !/^https:\/\/[\w.-]+(\/.*)?$/.test(v)) return say('Adres musi zaczynać się od https://');
     st.cloudUrl = v || null;
     await save();
     viewCloud();
@@ -94,14 +95,17 @@ export async function viewCloud() {
       const found = await enableSync(ev.target.pass.value);
       startAutoSync();
       if (found) {
-        const theirs = confirm(`Pod tym hasłem są już dane z innego urządzenia: ${describe(found.remote)}.\n\nOK = pobierz je na ten telefon (zastąpią obecne: ${describe(data)})\nAnuluj = zostaw dane z tego telefonu i wyślij je`);
+        const theirs = await choose(`Na serwerze: ${describe(found.remote)}.\nNa tym telefonie: ${describe(data)}.`, [
+          { label: 'Pobierz dane z serwera', value: true },
+          { label: 'Zostaw dane z tego telefonu', value: false, style: 'secondary' },
+        ], { title: 'Pod tym hasłem są już dane', cancel: null });
         if (theirs) {
           await adoptRemote(found.remote, found.version);
-          alert('Pobrano dane z innego urządzenia.');
-        } else alert(syncLabel[(await syncNow({ resolve: 'mine' })).status] ?? 'Gotowe.');
+          toast('Pobrano dane z innego urządzenia.');
+        } else toast(syncLabel[(await syncNow({ resolve: 'mine' })).status] ?? 'Gotowe.');
       } else {
         await syncNow();
-        alert('Synchronizacja włączona. Na innych urządzeniach wpisz to samo hasło.');
+        say('Na innych urządzeniach wpisz to samo hasło.', 'Synchronizacja włączona');
       }
       viewCloud();
     });
@@ -109,14 +113,17 @@ export async function viewCloud() {
   document.getElementById('sync-now')?.addEventListener('click', (ev) => busy(ev.currentTarget, async () => {
     let r = await syncNow();
     if (r.status === 'conflict') {
-      const theirs = confirm('Dane zmieniły się i tutaj, i na innym urządzeniu.\n\nOK = weź wersję z innego urządzenia\nAnuluj = zostaw tę i wyślij ją');
+      const theirs = await choose('Dane zmieniły się i tutaj, i na innym urządzeniu.', [
+        { label: 'Weź wersję z innego urządzenia', value: true },
+        { label: 'Zostaw wersję z tego telefonu', value: false, style: 'secondary' },
+      ], { title: 'Dwie różne wersje', cancel: null });
       r = await syncNow({ resolve: theirs ? 'theirs' : 'mine' });
     }
-    alert(syncLabel[r.status] ?? 'Gotowe.');
+    toast(syncLabel[r.status] ?? 'Gotowe.');
     viewCloud();
   }));
   document.getElementById('sync-off')?.addEventListener('click', async () => {
-    if (!confirm('Wyłączyć synchronizację na tym urządzeniu? Dane zostają na telefonie.')) return;
+    if (!await ask('Dane zostają na telefonie.', { title: 'Wyłączyć synchronizację?', ok: 'Wyłącz', danger: true })) return;
     await disableSync();
     viewCloud();
   });
@@ -132,8 +139,7 @@ export async function viewCloud() {
       <p class="small">Na nowym telefonie: otwórz Progress (z ekranu początkowego) → Ustawienia → Synchronizacja → „Zeskanuj kod”. Kod jest ważny przez godzinę.</p>
       <button type="button" class="link-btn" id="copy-link">Skopiuj link zamiast kodu</button>`;
     document.getElementById('copy-link').onclick = async () => {
-      await navigator.clipboard?.writeText(link);
-      alert('Link skopiowany. Wklej go na nowym telefonie w „Zeskanuj kod” → anuluj skaner.');
+      await copyText(link, 'Link skopiowany. Na nowym telefonie wklej go po zamknięciu skanera.');
     };
   });
   document.getElementById('receive-transfer').onclick = async () => {
@@ -141,9 +147,9 @@ export async function viewCloud() {
     try {
       code = await scanBarcode({ qr: true });
     } catch (err) {
-      alert(err.message);
+      say(err.message);
     }
-    code ??= prompt('Wklej link z drugiego telefonu')?.trim();
+    code ??= await askText('Wklej link z drugiego telefonu', { ok: 'Dalej' });
     if (code) location.hash = `#/receive/${code.split('#/receive/').pop()}`;
   };
 
@@ -157,7 +163,7 @@ export async function viewCloud() {
     const days = data.profile.trainingDays ?? defaultTrainingDays(currentWeek()?.week.sessions.length);
     await savePush(reminderList(next, days));
     await save();
-    alert(Object.values(next).some((r) => r.on) ? 'Przypomnienia zapisane.' : 'Przypomnienia wyłączone.');
+    toast(Object.values(next).some((r) => r.on) ? 'Przypomnienia zapisane.' : 'Przypomnienia wyłączone.');
   }));
   document.getElementById('test-push')?.addEventListener('click', (ev) => busy(ev.currentTarget, async () => {
     await testPush();
@@ -284,8 +290,7 @@ export function viewReport(weeks = 4) {
     if (navigator.share) {
       try { await navigator.share({ title: 'Raport z postępów', text: `Raport ${dateLabel(r.from)} – ${dateLabel(r.to)}`, url }); return; } catch (e) { if (e.name === 'AbortError') return; }
     }
-    await navigator.clipboard?.writeText(url);
-    alert('Link do raportu skopiowany.');
+    await copyText(url, 'Link do raportu skopiowany.');
   };
 }
 

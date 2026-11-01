@@ -25,6 +25,11 @@ import {
 import { waterGoalMl } from './diet-plus.js';
 import { viewCloud, viewReceive, viewReport, viewReportShared } from './views-platform.js';
 import { startAutoSync, setTempCloudUrl, cloudUrl, syncConflict } from './cloud.js';
+import { toast, say, info, ask, askText, choose, undoable, copyText, showCopy } from './ui.js';
+import { BIG_THREE, strengthLevel, dotsHistory } from './strength.js';
+import { voiceSupported, listen } from './voice.js';
+import { workoutsCsv, measurementsCsv, foodCsv } from './export-csv.js';
+import { viewHabits, habitsToday, bindHabitsToday, viewFasting, fastingToday, bindFastingToday } from './views-habits.js';
 import {
   viewChallenges, viewChallenge, viewChallengeJoin, challengesToday, viewWrapped, equipmentSettings, bindEquipmentSettings, adaptToEquipment,
 } from './views-extra.js';
@@ -49,7 +54,7 @@ function viewEmpty() {
     </div>`);
   document.getElementById('from-phone').onclick = async () => {
     if (!cloudUrl()) {
-      const url = prompt('Adres serwera z ustawień starego telefonu (Ustawienia → Synchronizacja)')?.trim();
+      const url = await askText('Adres serwera z ustawień starego telefonu (Ustawienia → Synchronizacja)', { type: 'url', placeholder: 'https://…', ok: 'Dalej' });
       if (!url) return;
       setTempCloudUrl(url);
     }
@@ -57,9 +62,9 @@ function viewEmpty() {
     try {
       code = await scanBarcode({ qr: true });
     } catch (err) {
-      alert(err.message);
+      say(err.message);
     }
-    code ??= prompt('Wklej link z drugiego telefonu')?.trim();
+    code ??= await askText('Wklej link z drugiego telefonu', { ok: 'Dalej' });
     if (code) location.hash = `#/receive/${code.split('#/receive/').pop()}`;
   };
   document.getElementById('start-fresh').onclick = () => { location.hash = '#/welcome'; };
@@ -107,7 +112,7 @@ function viewWelcome() {
       goal: f.get('goal'), activitySource: 'manual', activityLevel: n('days') >= 4 ? 'moderate' : 'light',
     };
     if (!(profile.heightCm > 100 && profile.heightCm < 250) || !(profile.weightKg > 30 && profile.weightKg < 300)) {
-      alert('Sprawdź wzrost i wagę.');
+      say('Sprawdź wzrost i wagę.');
       return;
     }
     profile.birthYear = Number(profile.birthDate.slice(0, 4));
@@ -162,12 +167,7 @@ async function sharePlan(program, withKg) {
       if (err.name === 'AbortError') return;
     }
   }
-  try {
-    await navigator.clipboard.writeText(url);
-    alert('Link do planu skopiowany. Wklej go znajomemu w wiadomości.');
-  } catch {
-    prompt('Skopiuj link do planu:', url);
-  }
+  await copyText(url, 'Link do planu skopiowany. Wklej go znajomemu w wiadomości.');
 }
 
 async function viewPlanImport(code) {
@@ -227,13 +227,32 @@ function ring(value, goal, color, label, unit) {
   const over = goal && value > goal * 1.05;
   return `<div class="ring">
     <svg viewBox="0 0 80 80" aria-hidden="true"><circle cx="40" cy="40" r="${r}" class="track"/>
-      ${pct > 0 ? `<circle cx="40" cy="40" r="${r}" class="fill" style="stroke:${over ? '#ff3b30' : color}" stroke-dasharray="${(pct * c).toFixed(1)} ${c.toFixed(1)}" transform="rotate(-90 40 40)"/>` : ''}</svg>
+      ${pct > 0 ? `<circle cx="40" cy="40" r="${r}" class="fill" style="stroke:${over ? 'var(--danger)' : color}" stroke-dasharray="${(pct * c).toFixed(1)} ${c.toFixed(1)}" transform="rotate(-90 40 40)"/>` : ''}</svg>
     <div class="ring-text"><b>${fmt(value)}</b><span>${goal ? `z ${fmt(goal)} ${unit}` : unit}</span></div>
     <div class="ring-label">${label}</div>
   </div>`;
 }
 
 // One main action for right now: the workout in progress, today's planned workout or the next meal.
+const TODAY_PARTS = { rings: 'Kalorie i białko', quick: 'Szybkie akcje', stats: 'Kroki, sen i waga', feel: 'Samopoczucie', week: 'Treningi z tego tygodnia', last: 'Ostatni trening' };
+const shown = (part) => !(data.settings.todayHidden ?? []).includes(part);
+
+function viewTodayEdit() {
+  render('Ekran Dziś', `
+    <p class="muted small" style="margin:0 4px 12px">Wybierz, co widać na ekranie Dziś. Najważniejsza akcja (trening albo posiłek) zostaje zawsze. Post i nawyki włączasz na ich ekranach.</p>
+    <div class="list">${Object.entries(TODAY_PARTS).map(([k, label]) => `<label class="row toggle-row"><span class="grow">${label}</span><input type="checkbox" data-part="${k}" ${shown(k) ? 'checked' : ''}></label>`).join('')}</div>
+  `, { back: '#/today' });
+  view.onchange = async (ev) => {
+    const k = ev.target.dataset.part;
+    if (!k) return;
+    const hidden = new Set(data.settings.todayHidden ?? []);
+    if (ev.target.checked) hidden.delete(k);
+    else hidden.add(k);
+    data.settings.todayHidden = [...hidden];
+    await save();
+  };
+}
+
 async function viewToday() {
   const draft = await db.get('draft');
   const backupDays = await backupDue();
@@ -284,11 +303,11 @@ async function viewToday() {
       ${hero.sub ? `<p class="small">${hero.sub}</p>` : ''}
       <a class="btn" href="${hero.href}">${icon(hero.icon, 'icon-sm')} ${hero.label}</a>
     </div>
-    <a class="card rings" href="#/diet">
+    ${shown('rings') ? `<a class="card rings" href="#/diet">
       ${ring(eaten.kcal, t?.kcal, 'var(--accent)', 'Kalorie', 'kcal')}
       ${ring(eaten.p, t?.protein, 'var(--good)', 'Białko', 'g')}
-    </a>
-    <div class="quick">
+    </a>` : ''}
+    <div class="quick" ${shown('quick') ? '' : 'hidden'}>
       ${hero.icon === 'plus' ? '' : `<a href="#/food-add/${today}/${meal}">${icon('apple', 'icon-sm')}<span>Posiłek</span></a>`}
       <a href="#/measure">${icon('scale', 'icon-sm')}<span>Ważenie</span></a>
       ${draft ? '' : `<a href="#/log-free">${icon('dumbbell', 'icon-sm')}<span>Bez planu</span></a>`}
@@ -296,25 +315,41 @@ async function viewToday() {
       <button type="button" id="water-quick">${icon('droplet', 'icon-sm')}<span>Woda ${fmt((dayLog(today)?.waterMl ?? 0) / 1000, 2)} l</span></button>
       ${cw ? '' : `<a href="#/templates">${icon('calendar-days', 'icon-sm')}<span>Wybierz plan</span></a>`}
     </div>
-    <div class="stats three">
+    <div class="stats three" ${shown('stats') ? '' : 'hidden'}>
       <a class="stat" href="#/steps"><div class="label">${icon('footprints', 'icon-sm')} Kroki</div><div class="value">${fmt(stepsToday)}</div>
         <div class="bar thin"><span style="width:${Math.min(100, Math.round((stepsToday ?? 0) / stepsGoal() * 100))}%"></span></div></a>
       <div class="stat"><div class="label">${icon('moon', 'icon-sm')} Sen</div><div class="value">${sleep7 ? `${Math.floor(sleep7 / 60)}<span class="unit">h</span>${Math.round(sleep7 % 60)}` : '–'}</div></div>
       <a class="stat" href="#/progress"><div class="label">${icon('scale', 'icon-sm')} Waga</div><div class="value">${fmt(data.settings.trendOnly ? weightTrend(weightPoints()).at(-1)?.trend ?? data.profile.weightKg : data.profile.weightKg, 1)}</div></a>
     </div>
+    ${shown('feel') ? feelCard(today) : ''}
+    ${fastingToday()}
+    ${habitsToday()}
     ${challengesToday()}
-    ${cw ? `<div class="section-title">Ten tydzień</div>${sessionList(cw.program, cw.week)}` : ''}
-    ${lastLog ? `<a class="list row" href="#/history/${lastLog.id}">${icon('check', 'icon-sm')}
+    ${cw && shown('week') ? `<div class="section-title">Ten tydzień</div>${sessionList(cw.program, cw.week)}` : ''}
+    ${lastLog && shown('last') ? `<a class="list row" href="#/history/${lastLog.id}">${icon('check', 'icon-sm')}
       <div class="grow"><div class="title">Ostatni trening</div><div class="sub">${dateLabel(lastLog.date)} · ${esc(lastLog.title)}</div></div>
       <span class="chev">${icon('chevron-right', 'icon-sm')}</span></a>` : ''}
+    <a class="link-btn today-edit" href="#/today-edit">${icon('settings', 'icon-xs')} Dostosuj ten ekran</a>
   `);
   document.getElementById('backup-now')?.addEventListener('click', async () => {
     try {
       if (await exportBackup()) route();
     } catch (err) {
-      alert(`Nie udało się zapisać kopii: ${err.message}`);
+      say(`Nie udało się zapisać kopii: ${err.message}`);
     }
   });
+  bindHabitsToday(route);
+  view.querySelectorAll('[data-feel]').forEach((b) => b.addEventListener('click', async () => {
+    setDayValues(today, { feel: Number(b.dataset.feel) });
+    await save();
+    route();
+  }));
+  document.getElementById('feel-change')?.addEventListener('click', async () => {
+    setDayValues(today, { feel: null });
+    await save();
+    route();
+  });
+  bindFastingToday(route);
   document.getElementById('water-quick').onclick = async () => {
     addWater(today, 250);
     await save();
@@ -348,7 +383,7 @@ function viewPlans() {
     <button class="btn secondary" id="new-program" style="margin-top:12px">${icon('plus', 'icon-sm')} Ułóż własny plan</button>
   `);
   document.getElementById('new-program').onclick = async () => {
-    const name = prompt('Nazwa planu (np. „Siła – jesień”)')?.trim();
+    const name = await askText('Nazwa planu', { title: 'Nowy plan', placeholder: 'np. Siła – jesień', ok: 'Utwórz' });
     if (!name) return;
     const program = { id: uid('plan'), name, weeks: [] };
     data.programs.push(program);
@@ -422,19 +457,19 @@ function viewProgram(programId) {
     const block = await createNextBlock(selected);
     location.hash = `#/plans/${block.id}`;
   });
-  document.getElementById('share-plan').onclick = () => sharePlan(selected, document.getElementById('share-kg').checked).catch((err) => alert(`Nie udało się przygotować linku: ${err.message}`));
+  document.getElementById('share-plan').onclick = () => sharePlan(selected, document.getElementById('share-kg').checked).catch((err) => say(`Nie udało się przygotować linku: ${err.message}`));
   document.getElementById('rename-program').onclick = async () => {
-    const name = prompt('Nowa nazwa planu', selected.name)?.trim();
+    const name = await askText('Nazwa planu', { title: 'Zmień nazwę', value: selected.name });
     if (!name) return;
     selected.name = name;
     await save();
     route();
   };
   document.getElementById('delete-program').onclick = async () => {
-    if (!confirm(`Usunąć plan „${selected.name}” razem ze wszystkimi tygodniami? Historia treningów zostaje.`)) return;
-    data.programs = data.programs.filter((p) => p !== selected);
-    if (data.settings.currentProgram === selected.id) delete data.settings.currentProgram;
-    await save();
+    await undoable(`Usunięto plan „${selected.name}”.`, () => {
+      data.programs = data.programs.filter((p) => p !== selected);
+      if (data.settings.currentProgram === selected.id) delete data.settings.currentProgram;
+    });
     location.hash = '#/plans';
   };
 }
@@ -462,7 +497,7 @@ function viewWeek(programId, number) {
 
   document.getElementById('add-session').onclick = async () => {
     const order = week.sessions.length + 1;
-    const name = prompt('Nazwa treningu (np. „Nogi”, „Góra”)', `Trening ${order}`)?.trim();
+    const name = await askText('Nazwa treningu', { title: 'Nowy trening', value: `Trening ${order}`, placeholder: 'np. Nogi, Góra', ok: 'Dodaj' });
     if (name == null) return;
     week.sessions.push({ order, name: name || null, blocks: [{ type: 'warmup', items: [] }, { type: 'main', items: [] }, { type: 'cooldown', items: [] }] });
     await save();
@@ -488,16 +523,14 @@ function viewWeek(programId, number) {
     location.hash = '#/today';
   });
   document.getElementById('label-week').onclick = async () => {
-    const label = prompt('Opis tygodnia (np. „Deload”, „Test”); puste pole usuwa opis', week.label ?? '');
+    const label = await askText('Opis tygodnia', { title: `Tydzień ${week.number}`, value: week.label ?? '', placeholder: 'np. Deload, Test', hint: 'Puste pole usuwa opis.' });
     if (label == null) return;
     week.label = label.trim() || null;
     await save();
     route();
   };
   document.getElementById('delete-week').onclick = async () => {
-    if (!confirm(`Usunąć tydzień ${week.number} z „${program.name}”? Historia treningów zostaje.`)) return;
-    program.weeks = program.weeks.filter((w) => w !== week);
-    await save();
+    await undoable(`Usunięto tydzień ${week.number}.`, () => { program.weeks = program.weeks.filter((w) => w !== week); });
     location.hash = `#/plans/${program.id}`;
   };
 }
@@ -575,17 +608,17 @@ function viewSession(programId, number, order) {
     </div>
   `, { back: `#/week/${program.id}/${week.number}` });
   document.getElementById('rename-session').onclick = async () => {
-    const name = prompt('Nazwa treningu', sessionTitle(session))?.trim();
+    const name = await askText('Nazwa treningu', { title: 'Zmień nazwę', value: sessionTitle(session) });
     if (name == null) return;
     session.name = name || null;
     await save();
     route();
   };
   document.getElementById('delete-session').onclick = async () => {
-    if (!confirm(`Usunąć „${sessionTitle(session)}” z tygodnia ${week.number}?`)) return;
-    week.sessions = week.sessions.filter((s) => s !== session);
-    week.sessions.forEach((s, i) => { s.order = i + 1; });
-    await save();
+    await undoable(`Usunięto „${sessionTitle(session)}”.`, () => {
+      week.sessions = week.sessions.filter((s) => s !== session);
+      week.sessions.forEach((s, i) => { s.order = i + 1; });
+    });
     location.hash = `#/week/${program.id}/${week.number}`;
   };
 }
@@ -726,6 +759,42 @@ function viewNutrition() {
   });
 }
 
+const FEELINGS = [[1, 'frown', 'Źle'], [2, 'frown', 'Słabo'], [3, 'meh', 'Normalnie'], [4, 'smile', 'Dobrze'], [5, 'smile', 'Świetnie']];
+
+// "How do you feel?" on Today: one tap, counted into readiness for training.
+function feelCard(date) {
+  const feel = dayLog(date)?.feel;
+  if (feel) {
+    const [, ic, label] = FEELINGS[feel - 1];
+    return `<div class="feel-done small muted">${icon(ic, 'icon-xs')} Samopoczucie: ${label.toLowerCase()} <button type="button" class="link-btn" id="feel-change">Zmień</button></div>`;
+  }
+  return `<div class="card feel-card"><p>Jak się dziś czujesz?</p>
+    <div class="feel-row" role="group" aria-label="Samopoczucie">${FEELINGS.map(([v, ic, label]) => `<button type="button" data-feel="${v}" aria-label="${label}">${icon(ic)}<span>${label}</span></button>`).join('')}</div>
+    <p class="small muted" style="margin-top:6px">Liczy się do gotowości do treningu razem ze snem i tętnem.</p></div>`;
+}
+
+// Body weight on a date: the last measurement before it, or the profile weight.
+function weightAt(date) {
+  const before = weightPoints().filter((p) => p.date <= date);
+  return before.at(-1)?.value ?? weightPoints()[0]?.value ?? data.profile.weightKg;
+}
+
+// Squat, bench and deadlift against body weight, and the DOTS score with its history.
+function strengthCard() {
+  const records = data.oneRepMaxes ?? [];
+  if (!records.some((r) => BIG_THREE.some((l) => l.id === r.exerciseId))) return '';
+  const bw = weightAt(todayIso());
+  const s = strengthLevel(records, bw, data.profile.sex);
+  const history = dotsHistory(records, weightAt, data.profile.sex);
+  return `<div class="card">
+    <p>Poziom siły</p>
+    ${s.dots ? `<h2>${fmt(s.dots, 1)} <span class="muted" style="font-size:0.882rem;font-weight:500">pkt DOTS · trójbój ${fmt(s.total, 1)} kg</span></h2>` : ''}
+    <div class="strength-lifts">${s.lifts.map((l) => `<div><span class="small muted">${l.name}</span><b>${l.kg ? `${fmt(l.kg, 1)} kg` : '–'}</b><span class="small">${l.ratio ? `${fmt(l.ratio, 2)} × masa ciała` : 'brak wyniku'}</span></div>`).join('')}</div>
+    ${history.length >= 2 ? sparkline(history, 'pkt') : ''}
+    <p class="small muted" style="margin-top:6px">${s.dots ? 'DOTS porównuje siłę osób o różnej masie ciała (wzór federacji IPF). Liczony z szacowanego 1RM i aktualnej wagi.' : 'Wynik DOTS pojawi się, gdy będzie szacowany 1RM we wszystkich trzech bojach.'}</p>
+  </div>`;
+}
+
 // Line chart; with `trend` the raw points become dots and the trend is the line.
 function sparkline(points, unit, { trend = null } = {}) {
   if (points.length < 2) return '<p class="small">Za mało pomiarów na wykres.</p>';
@@ -740,12 +809,15 @@ function sparkline(points, unit, { trend = null } = {}) {
   const d = line.map((p, i) => `${i ? 'L' : 'M'}${X(new Date(p.date).getTime()).toFixed(1)},${Y(p.value).toFixed(1)}`).join(' ');
   const area = `${d} L${X(x1)},${h - pad} L${X(x0)},${h - pad} Z`;
   const dots = trend ? points.map((p, i) => `<circle cx="${X(xs[i]).toFixed(1)}" cy="${Y(p.value).toFixed(1)}" r="1.8"/>`).join('') : '';
-  return `<svg class="spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" role="img" aria-label="Wykres">
+  const v = (p) => `${fmt(p.value, 1)} ${unit}`;
+  const label = `Wykres od ${dateLabel(points[0].date)} do ${dateLabel(points.at(-1).date)}: z ${v(line[0])} na ${v(line.at(-1))}, najmniej ${fmt(Math.min(...line.map((p) => p.value)), 1)}, najwięcej ${fmt(Math.max(...line.map((p) => p.value)), 1)} ${unit}.`;
+  const pts = line.map((p) => [Math.round(X(new Date(p.date).getTime()) / w * 1000) / 10, Math.round(Y(p.value) / h * 1000) / 10, `${fmt(p.value, 1)} ${unit} · ${dateLabel(p.date)}`]);
+  return `<div class="chart" data-pts="${esc(JSON.stringify(pts))}"><svg class="spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" role="img" aria-label="${esc(label)}">
     <path class="area" d="${area}"/>${dots}<path class="line" d="${d}"/>
     <text x="${pad}" y="${h - 2}">${dateLabel(points[0].date)}</text>
     <text x="${w - pad}" y="${h - 2}" text-anchor="end">${dateLabel(points.at(-1).date)}</text>
     <text x="${pad}" y="12">${fmt(y1 - 1, 1)} ${unit}</text>
-  </svg>`;
+  </svg><i class="chart-dot" hidden></i><span class="chart-tip" hidden></span></div>`;
 }
 
 const TAPE = { waistCm: 'Talia', hipsCm: 'Biodra', chestCm: 'Klatka', armCm: 'Ramię', thighCm: 'Udo' };
@@ -845,6 +917,7 @@ function viewProgress() {
       <p class="small muted" style="margin-top:6px">${data.settings.trendOnly ? 'Pokazuję tylko trend (Ustawienia → Tylko trend wagi), bez dziennych wyników.' : 'Kropki to pomiary, linia to średnia wygładzona. Dzienne wahania o 1–2 kg to głównie woda.'}</p>
     </div>
     ${data.profile.goalWeightKg ? goalCard() : ''}
+    ${strengthCard()}
     <a class="card" href="#/review" style="display:block;color:inherit;text-decoration:none"><p>${icon('calendar-check', 'icon-xs')} Przegląd tygodnia</p>
       <p class="small" style="margin-top:4px">Podsumowanie ostatnich 7 dni i propozycje na kolejny tydzień.</p></a>
     <a class="card" href="#/steps" style="display:block;color:inherit;text-decoration:none">
@@ -921,6 +994,9 @@ async function viewSettings() {
 <span class="grow">Wczytaj plik danych</span>${icon('upload', 'icon-sm')}<input type="file" accept="application/json,.json" id="import"></label>
       ${data ? `<label class="row"><span class="grow">Importuj historię z Hevy lub Strong (CSV)</span>${icon('file-input', 'icon-sm')}<input type="file" accept=".csv,text/csv,text/comma-separated-values" id="import-csv"></label>` : ''}
       ${data ? `<a class="row" id="export" href="#"><span class="grow">Zapisz kopię zapasową</span><span class="sub">${last ? `ostatnio ${dateLabel(last)}` : 'jeszcze nie'}</span>${icon('download', 'icon-sm')}</a>` : ''}
+      ${data ? `<button type="button" class="row link-row" data-csv="workouts"><span class="grow">Treningi do pliku CSV</span><span class="sub">format Strong</span>${icon('file-down', 'icon-sm')}</button>
+      <button type="button" class="row link-row" data-csv="measures"><span class="grow">Pomiary do pliku CSV</span>${icon('file-down', 'icon-sm')}</button>
+      <button type="button" class="row link-row" data-csv="food"><span class="grow">Dziennik posiłków do pliku CSV</span>${icon('file-down', 'icon-sm')}</button>` : ''}
     </div>
     ${data ? `<button class="btn danger" id="reset">${icon('trash-2', 'icon-sm')} Usuń dane z telefonu</button>` : ''}
     <p class="muted small" style="text-align:center;margin-top:24px">Ikony: Lucide (licencja ISC).<br>Dane są przechowywane wyłącznie na tym urządzeniu.</p>
@@ -938,27 +1014,28 @@ async function viewSettings() {
     try {
       const text = await file.text();
       let workouts = workoutsFromCsv(text);
-      if (workouts[0]?.key.startsWith('strong:') && !confirm('Strong nie zapisuje jednostki. Czy ciężary w tym pliku są w kilogramach?\n\nOK = kilogramy, Anuluj = funty (lb)')) {
+      if (workouts[0]?.key.startsWith('strong:') && await choose('Strong nie zapisuje jednostki. W jakich jednostkach są ciężary w tym pliku?', [{ label: 'Kilogramy', value: 'kg' }, { label: 'Funty (lb)', value: 'lb', style: 'secondary' }], { cancel: null }) === 'lb') {
         workouts = workoutsFromCsv(text, { unit: 'lb' });
       }
       const fresh = workouts.filter((w) => !data.workoutLogs.some((l) => l.importKey === w.key));
-      if (!fresh.length) return alert('Wszystkie treningi z tego pliku są już w aplikacji.');
+      if (!fresh.length) return say('Wszystkie treningi z tego pliku są już w aplikacji.');
       const names = new Set(fresh.flatMap((w) => w.entries.map((x) => x.name)));
-      if (!confirm(`Znaleziono ${fresh.length} treningów (${dateLabel(fresh[0].date)} – ${dateLabel(fresh.at(-1).date)}), ${names.size} ćwiczeń. Zaimportować?`)) return;
+      if (!await ask(`Znaleziono ${fresh.length} treningów (${dateLabel(fresh[0].date)} – ${dateLabel(fresh.at(-1).date)}), ${names.size} ćwiczeń.`, { title: 'Import treningów', ok: 'Importuj' })) return;
       const records = importWorkouts(fresh);
       await save();
-      alert(`Zaimportowano ${fresh.length} treningów.${records ? ` Rekordy 1RM: ${records}.` : ''} Ćwiczenia bez polskiego odpowiednika mają nazwy z pliku; możesz je zmienić w Ustawienia → Ćwiczenia.`);
+      say(`Zaimportowano ${fresh.length} treningów.${records ? ` Rekordy 1RM: ${records}.` : ''} Ćwiczenia bez polskiego odpowiednika mają nazwy z pliku; możesz je zmienić w Ustawienia → Ćwiczenia.`, 'Gotowe');
       route();
     } catch (err) {
-      alert(`Nie udało się zaimportować: ${err.message}`);
+      say(`Nie udało się zaimportować: ${err.message}`);
     }
   });
+  document.querySelectorAll('[data-csv]').forEach((b) => b.addEventListener('click', () => exportCsv(b.dataset.csv).catch((err) => say(`Nie udało się zapisać pliku: ${err.message}`))));
   document.getElementById('export')?.addEventListener('click', async (e) => {
     e.preventDefault();
     try {
       if (await exportBackup()) route();
     } catch (err) {
-      alert(`Nie udało się zapisać kopii: ${err.message}`);
+      say(`Nie udało się zapisać kopii: ${err.message}`);
     }
   });
   document.getElementById('auto-progression')?.addEventListener('change', async (ev) => {
@@ -981,7 +1058,7 @@ async function viewSettings() {
     route();
   });
   document.getElementById('reset')?.addEventListener('click', async () => {
-    if (!confirm('Usunąć wszystkie dane z tego telefonu? Tej operacji nie można cofnąć.')) return;
+    if (!await ask('Wszystkie treningi, posiłki i pomiary znikną z tego telefonu. Tej operacji nie można cofnąć.', { title: 'Usunąć wszystkie dane?', ok: 'Usuń wszystko', danger: true })) return;
     await db.del('data');
     setData(null);
     location.hash = '#/today';
@@ -1124,7 +1201,7 @@ function importWorkouts(workouts) {
     for (const en of w.entries) {
       if (NO_1RM_CATEGORIES.has(exInfo(en.exerciseId).cat)) continue;
       for (const x of en.sets) {
-        if (x.warmup || !(x.kg > 0 && x.reps > 0 && x.reps <= 10)) continue;
+        if (x.warmup || x.kind === 'drop' || !(x.kg > 0 && x.reps > 0 && x.reps <= 10)) continue;
         const e1rm = estimate1RM(x.kg, x.reps);
         if (e1rm > (best.get(en.exerciseId)?.e1rm ?? 0)) best.set(en.exerciseId, { e1rm, date: w.date, kg: x.kg, reps: x.reps });
       }
@@ -1145,21 +1222,36 @@ const BACKUP_EVERY_DAYS = 7;
 
 // The only copy of the data lives in Safari's storage, so the app asks for a copy every week.
 // On iPhone the share sheet offers "Zapisz w Plikach" (iCloud Drive); elsewhere the file downloads.
-async function exportBackup() {
-  const name = `progress-kopia-${todayIso()}.json`;
-  const file = new File([JSON.stringify(data)], name, { type: 'application/json' });
+// Hands a file to the share sheet (Save to Files, AirDrop…) or downloads it.
+async function shareFile(file, title) {
   if (navigator.canShare?.({ files: [file] })) {
     try {
-      await navigator.share({ files: [file], title: 'Kopia danych Progress' });
+      await navigator.share({ files: [file], title });
     } catch (err) {
       if (err.name === 'AbortError') return false;
       throw err;
     }
   } else {
-    const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(file), download: name });
+    const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(file), download: file.name });
     a.click();
     setTimeout(() => URL.revokeObjectURL(a.href), 1000);
   }
+  return true;
+}
+
+async function exportCsv(kind) {
+  const csv = kind === 'workouts' ? workoutsCsv(data.workoutLogs, exName)
+    : kind === 'measures' ? measurementsCsv(data.bodyMeasurements ?? [])
+      : foodCsv(data.foodLog, (e) => ({ name: e.quick?.name ?? foodById(e.foodId)?.name ?? '?', grams: e.quick ? null : e.grams, ...entryMacros(e) }));
+  const names = { workouts: 'treningi', measures: 'pomiary', food: 'posilki' };
+  // The BOM makes Excel read Polish letters correctly.
+  return shareFile(new File(['\ufeff', csv], `progress-${names[kind]}-${todayIso()}.csv`, { type: 'text/csv' }), 'Eksport z Progress');
+}
+
+async function exportBackup() {
+  const name = `progress-kopia-${todayIso()}.json`;
+  const file = new File([JSON.stringify(data)], name, { type: 'application/json' });
+  if (!await shareFile(file, 'Kopia danych Progress')) return false;
   await db.set('lastBackup', new Date().toISOString());
   await db.del('backupSnooze');
   return true;
@@ -1189,7 +1281,7 @@ function bindImport() {
       location.hash = '#/today';
       route();
     } catch (err) {
-      alert(`Nie udało się wczytać pliku: ${err.message}`);
+      say(`Nie udało się wczytać pliku: ${err.message}`);
     }
   });
 }
@@ -1252,7 +1344,7 @@ function startRest(seconds) {
   stopRest();
   const bar = document.createElement('div');
   bar.className = 'rest-bar';
-  bar.innerHTML = `${icon('timer')}<span class="grow">Przerwa</span><b id="rest-left"></b><button type="button" id="rest-more" aria-label="Dodaj 15 sekund">+15 s</button><button type="button" id="rest-skip">Pomiń</button>`;
+  bar.innerHTML = `${icon('timer')}<span class="grow">Przerwa</span><b id="rest-left"></b><button type="button" id="rest-more" aria-label="Dodaj 15 sekund">+15 s</button><button type="button" id="rest-skip">Pomiń</button><span class="sr-only" aria-live="assertive" id="rest-say"></span>`;
   document.body.append(bar);
   timer = { bar, until: Date.now() + seconds * 1000, beep: scheduleBeep(seconds) };
   bar.querySelector('#rest-skip').onclick = stopRest;
@@ -1268,6 +1360,7 @@ function startRest(seconds) {
     bar.querySelector('#rest-left').textContent = `${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}`;
     if (left === 0) {
       bar.classList.add('done');
+      bar.querySelector('#rest-say').textContent = 'Koniec przerwy.';
       navigator.vibrate?.([200, 100, 200]);
       clearInterval(timer.interval);
       timer.timeout = setTimeout(stopRest, 4000);
@@ -1308,7 +1401,7 @@ function todayReadiness() {
   const day = dayLog(todayIso());
   const hrs = lastWithin(data.dailyLogs ?? [], 'restingHr', 30);
   const rirs = (data.workoutLogs ?? []).slice(-2).flatMap((l) => l.entries.flatMap((e) => e.sets)).map((x) => x.rir).filter((x) => x != null);
-  return readiness({ sleepMin: day?.sleepMin ?? null, restingHr: day?.restingHr ?? null, baselineHr: avg(hrs), recentRir: avg(rirs) });
+  return readiness({ sleepMin: day?.sleepMin ?? null, restingHr: day?.restingHr ?? null, baselineHr: avg(hrs), recentRir: avg(rirs), feel: day?.feel ?? null });
 }
 
 function newDraft(program, week, session) {
@@ -1344,12 +1437,13 @@ function newDraft(program, week, session) {
 
 const draftHash = (draft) => (draft.sessionKey === FREE_KEY ? '#/log-free' : `#/log/${draft.sessionKey}`);
 const FREE_KEY = 'free';
+const SET_KINDS = { drop: 'drop set', fail: 'do upadku' };
 
 // Loads the workout in progress, or starts a new one with `make` (asks before replacing another one).
 async function openDraft(key, make) {
   let draft = await db.get('draft');
   if (draft && draft.sessionKey !== key) {
-    if (!confirm(`Masz niezakończony trening: ${draft.title}. Porzucić go i zacząć ten?`)) {
+    if (!await ask(`Masz niezakończony trening: ${draft.title}.`, { title: 'Porzucić go i zacząć ten?', ok: 'Zacznij nowy', cancel: 'Wróć do niego', danger: true })) {
       location.hash = draftHash(draft);
       return null;
     }
@@ -1379,6 +1473,77 @@ async function viewFreeLog() {
 }
 
 // Exercise names for the picker: the user's exercises plus the built-in catalog.
+// ---------- search everything ----------
+
+// Screens and settings by the words people use for them.
+const PLACES_IN_APP = [
+  ['Ustawienia', '#/settings', 'ustawienia kopia eksport import dane'],
+  ['Mój profil', '#/profile', 'profil wzrost waga cel wiek dni treningowe'],
+  ['Cel, makro i zalecenia', '#/nutrition', 'kalorie makro bialko tdee zapotrzebowanie cel'],
+  ['Synchronizacja i przypomnienia', '#/cloud', 'synchronizacja chmura przypomnienia powiadomienia nowy telefon qr'],
+  ['Pomiar wagi i obwodów', '#/measure', 'waga pomiar obwody talia'],
+  ['Kroki', '#/steps', 'kroki zdrowie skrot'],
+  ['Skrót Zdrowie', '#/shortcut', 'skrot zdrowie apple health'],
+  ['Cardio', '#/cardio', 'cardio bieg rower spacer'],
+  ['Kalendarz treningów', '#/calendar', 'kalendarz seria'],
+  ['Przegląd tygodnia', '#/review', 'przeglad tydzien podsumowanie'],
+  ['Zdjęcia sylwetki', '#/photos', 'zdjecia sylwetka przed po'],
+  ['Raport dla trenera', '#/report', 'raport trener pdf'],
+  ['Wyzwania ze znajomymi', '#/challenges', 'wyzwania znajomi'],
+  ['Mój rok w liczbach', '#/wrapped', 'rok podsumowanie'],
+  ['Jadłospis i lista zakupów', '#/mealplan', 'jadlospis zakupy lista'],
+  ['Post przerywany', '#/fasting', 'post okno zywieniowe if 16:8'],
+  ['Nawyki i suplementy', '#/habits', 'nawyki suplementy kreatyna witaminy'],
+  ['Ćwiczenia', '#/exercises', 'cwiczenia lista wlasne'],
+  ['Gotowe plany', '#/templates', 'gotowe plany szablony'],
+  ['Trening bez planu', '#/log-free', 'trening wolny bez planu'],
+];
+
+// Exercises the user trains or has in plans first, then shorter (more basic) names.
+function byPopularity(choices) {
+  const uses = new Map();
+  for (const l of data.workoutLogs) for (const e of l.entries) uses.set(e.exerciseId, (uses.get(e.exerciseId) ?? 0) + 1);
+  for (const p of data.programs) for (const w of p.weeks) for (const ss of w.sessions) for (const b of ss.blocks) for (const it of b.items) uses.set(it.exerciseId, (uses.get(it.exerciseId) ?? 0) + 1);
+  return [...choices].sort((a, b) => (uses.get(b.id) ?? 0) - (uses.get(a.id) ?? 0) || a.name.length - b.name.length);
+}
+
+function viewSearch() {
+  render('Szukaj', `
+    <form class="card add-row" id="search-all" role="search">
+      <input type="search" name="q" placeholder="Ćwiczenie, produkt, przepis, ustawienie…" autocomplete="off" enterkeyhint="search" aria-label="Szukaj w aplikacji">
+    </form>
+    <div id="search-results" aria-live="polite"></div>
+  `, { back: 'history' });
+  const input = document.querySelector('#search-all input');
+  const row = (href, title, sub, ic) => `<a class="row" href="${href}">${icon(ic, 'icon-sm')}<div class="grow"><div class="title">${esc(title)}</div>${sub ? `<div class="sub">${esc(sub)}</div>` : ''}</div><span class="chev">${icon('chevron-right', 'icon-sm')}</span></a>`;
+  const draw = () => {
+    const q = input.value.trim();
+    const out = document.getElementById('search-results');
+    if (!q) {
+      out.innerHTML = '<p class="muted small" style="margin:8px 4px">Szukaj ćwiczeń, produktów, przepisów, planów i ustawień w jednym miejscu.</p>';
+      return;
+    }
+    const groups = [
+      ['Ekrany i ustawienia', rankByText(PLACES_IN_APP, q, (x) => `${x[0]} ${x[2]}`, 5).map(([t, h]) => row(h, t, '', 'chevron-right'))],
+      ['Ćwiczenia', rankByText(byPopularity(exerciseChoices()), q, (x) => x.name, 6).map((x) => row(`#/exercise/${encodeURIComponent(x.id)}`, x.name, exInfo(x.id).cat, 'dumbbell'))],
+      ['Moje plany', rankByText(data.programs, q, (x) => x.name, 4).map((x) => row(`#/plans/${x.id}`, x.name, `${x.weeks.length} tyg.`, 'calendar-days'))],
+      ['Gotowe plany', rankByText(TEMPLATES, q, (x) => `${x.name} ${x.level} ${x.equipment}`, 4).map((x) => row(`#/template/${x.id}`, x.name, `${x.perWeek}× w tygodniu`, 'calendar-days'))],
+      ['Przepisy', rankByText(allRecipes(), q, (x) => x.name, 6).map((x) => row(`#/recipe/${x.id}`, x.name, x.own ? 'Mój przepis' : '', 'chef-hat'))],
+      ['Moje produkty', rankByText(data.foods, q, mineText, 6).map((x) => row(`#/food/${x.id}`, x.name, x.brand ?? '', 'apple'))],
+    ].filter(([, list]) => list.length);
+    out.innerHTML = groups.length
+      ? groups.map(([t, list]) => `<div class="section-title">${t}</div><div class="list">${list.join('')}</div>`).join('')
+      : `<p class="muted small" style="margin:8px 4px">Nic nie znaleziono. Produkty z bazy znajdziesz w Dieta → Dodaj.</p>`;
+  };
+  input.oninput = draw;
+  document.getElementById('search-all').onsubmit = (ev) => {
+    ev.preventDefault();
+    document.querySelector('#search-results a')?.click();
+  };
+  draw();
+  input.focus();
+}
+
 function exerciseChoices() {
   const ids = new Set([...data.exercises.map((e) => e.id), ...Object.keys(CATALOG)]);
   return [...ids].map((id) => ({ id, name: exName(id) })).sort((a, b) => a.name.localeCompare(b.name, 'pl'));
@@ -1417,17 +1582,19 @@ function drawLog(draft, back) {
   };
 
   const setRow = (e, i, set) => {
-    // Warm-up sets are marked "R" and do not count as working sets 1, 2, 3…
-    const n = draft.entries[e].sets.slice(0, i).filter((x) => !x.warmup).length;
-    const p = !set.warmup && prevOf(draft.entries[e])?.sets[n];
+    // Warm-up (R) and drop (D) sets do not count as working sets 1, 2, 3…; to failure is U.
+    const n = draft.entries[e].sets.slice(0, i).filter((x) => !x.warmup && x.kind !== 'drop').length;
+    const p = !set.warmup && set.kind !== 'drop' && prevOf(draft.entries[e])?.sets[n];
+    const mark = set.warmup ? 'R' : set.kind === 'drop' ? 'D' : set.kind === 'fail' ? 'U' : n + 1;
+    const kindName = set.warmup ? 'rozgrzewkowa' : SET_KINDS[set.kind] ?? 'robocza';
     const prev = p ? `<span class="prev">${p.kg ? `${fmt(p.kg, 2)}×${p.reps ?? '?'}` : `${p.reps ?? '?'} powt.`}</span>` : '';
     return `
-    <div class="set-row ${set.done ? 'done' : ''} ${set.warmup ? 'warmup' : ''}">
-      <span class="set-no">${set.warmup ? 'R' : n + 1}${prev}</span>
+    <div class="set-row ${set.done ? 'done' : ''} ${set.warmup ? 'warmup' : ''} ${set.kind ? `kind-${set.kind}` : ''}">
+      <button type="button" class="set-no" data-kind="${e}/${i}" aria-label="Seria ${esc(String(mark))}, ${kindName}. Zmień rodzaj serii">${mark}${prev}</button>
       <label><input type="text" inputmode="decimal" data-e="${e}" data-s="${i}" data-f="kg" value="${set.kg ?? ''}" aria-label="Ciężar w kg"><span>kg</span></label>
       <label><input type="text" inputmode="numeric" data-e="${e}" data-s="${i}" data-f="reps" value="${set.reps ?? ''}" aria-label="Powtórzenia"><span>powt.</span></label>
       <input class="rir" type="text" inputmode="numeric" data-e="${e}" data-s="${i}" data-f="rir" value="${set.rir ?? ''}" placeholder="RIR" aria-label="RIR, powtórzenia w zapasie">
-      <button type="button" class="check" data-done="${e}/${i}" aria-label="Seria wykonana">${icon('check', 'icon-sm')}</button>
+      <button type="button" class="check" data-done="${e}/${i}" aria-label="Seria wykonana" aria-pressed="${Boolean(set.done)}">${icon('check', 'icon-sm')}</button>
     </div>`;
   };
 
@@ -1508,6 +1675,23 @@ function drawLog(draft, back) {
       const link = ev.target.closest('[data-link]');
       const swapTo = ev.target.closest('[data-swap-to]');
       const pain = ev.target.closest('[data-pain]');
+      const kind = ev.target.closest('[data-kind]');
+      if (kind) {
+        const [e, i] = kind.dataset.kind.split('/').map(Number);
+        const set = draft.entries[e].sets[i];
+        const next = await choose('Drop set to seria zaraz po poprzedniej z mniejszym ciężarem. Nie liczy się do rekordów, ale liczy do objętości.', [
+          { label: 'Robocza', value: 'work', style: set.warmup || set.kind ? 'secondary' : '' },
+          { label: 'Rozgrzewkowa (R)', value: 'warmup', style: set.warmup ? '' : 'secondary' },
+          { label: 'Drop set (D)', value: 'drop', style: set.kind === 'drop' ? '' : 'secondary' },
+          { label: 'Do upadku (U)', value: 'fail', style: set.kind === 'fail' ? '' : 'secondary' },
+        ], { title: 'Rodzaj serii' });
+        if (!next) return;
+        set.warmup = next === 'warmup';
+        if (next === 'drop' || next === 'fail') set.kind = next;
+        else delete set.kind;
+        await persist();
+        return draw();
+      }
       if (swapTo) {
         const input = document.querySelector('#ex-pick input');
         input.value = exName(swapTo.dataset.swapTo);
@@ -1518,10 +1702,10 @@ function drawLog(draft, back) {
         data.settings.pain ??= {};
         if (data.settings.pain[id]) delete data.settings.pain[id];
         else {
-          const note = prompt(`Co boli przy „${exName(id)}”? (opcjonalnie)`, '');
+          const note = await askText(`Co boli przy „${exName(id)}”?`, { title: 'Zgłoś ból', placeholder: 'opcjonalnie', ok: 'Zgłoś' });
           if (note === null) return;
-          data.settings.pain[id] = { since: todayIso(), note: note.trim() };
-          if (swapSuggestions(id).length && confirm('Zamienić to ćwiczenie na podobne, które może mniej obciążać? Dopóki ból nie minie, plan sam podstawi zamiennik.')) {
+          data.settings.pain[id] = { since: todayIso(), note };
+          if (swapSuggestions(id).length && await ask('Dopóki ból nie minie, plan sam podstawi zamiennik.', { title: 'Zamienić na podobne ćwiczenie, które mniej obciąża?', ok: 'Zamień', cancel: 'Zostaw' })) {
             swapIndex = Number(pain.dataset.pain);
           }
         }
@@ -1536,10 +1720,10 @@ function drawLog(draft, back) {
       const plates = ev.target.closest('[data-plates]');
       if (warm) {
         const en = draft.entries[Number(warm.dataset.warmup)];
-        if (!(workKg(en) > 0)) return alert('Najpierw wpisz ciężar serii roboczej.');
+        if (!(workKg(en) > 0)) return toast('Najpierw wpisz ciężar serii roboczej.');
         const first = en.sets.find((x) => !x.warmup && x.kg > 0);
         const ramp = warmupSets(first.kg, { barKg: barKg(), barbell: barbell(en) });
-        if (!ramp.length) return alert('Przy tym ciężarze osobne serie rozgrzewkowe nie są potrzebne.');
+        if (!ramp.length) return toast('Przy tym ciężarze osobne serie rozgrzewkowe nie są potrzebne.');
         en.sets.unshift(...ramp.map((x) => ({ ...x, warmup: true, done: false })));
         await persist();
         return draw();
@@ -1555,6 +1739,9 @@ function drawLog(draft, back) {
         const set = draft.entries[e].sets[i];
         set.done = !set.done;
         done.closest('.set-row').classList.toggle('done', set.done);
+        done.closest('.set-row').classList.toggle('just-done', set.done);
+        done.setAttribute('aria-pressed', String(set.done));
+        if (set.done) navigator.vibrate?.(15);
         const en = draft.entries[e];
         // In a superset the rest comes after the last exercise of the group.
         const nextInGroup = en.group && draft.entries[e + 1]?.group === en.group;
@@ -1565,7 +1752,8 @@ function drawLog(draft, back) {
         const e = Number(add.dataset.add);
         const sets = draft.entries[e].sets;
         const last = [...sets].reverse().find((x) => !x.warmup) ?? sets.at(-1) ?? { kg: null, reps: null };
-        sets.push({ ...last, warmup: false, done: false });
+        const { kind: _kind, ...copy } = last;
+        sets.push({ ...copy, warmup: false, done: false });
         document.getElementById(`sets-${e}`).insertAdjacentHTML('beforeend', setRow(e, sets.length - 1, sets.at(-1)));
         persist();
       } else if (swap) {
@@ -1574,8 +1762,9 @@ function drawLog(draft, back) {
         document.querySelector('#ex-pick input').focus();
       } else if (remove) {
         const en = draft.entries[Number(remove.dataset.remove)];
-        if (en.sets.some((x) => x.done) && !confirm(`Usunąć „${exName(en.exerciseId)}” razem z wykonanymi seriami?`)) return;
-        draft.entries.splice(Number(remove.dataset.remove), 1);
+        const removed = draft.entries.splice(Number(remove.dataset.remove), 1)[0];
+        const at = Number(remove.dataset.remove);
+        toast(`Usunięto „${exName(removed.exerciseId)}”.`, { action: { label: 'Cofnij', run: async () => { draft.entries.splice(at, 0, removed); await persist(); draw(); } } });
         swapIndex = null;
         await persist();
         draw();
@@ -1588,14 +1777,14 @@ function drawLog(draft, back) {
     };
     document.getElementById('cancel-swap')?.addEventListener('click', () => { swapIndex = null; draw(); });
     document.getElementById('fit-time')?.addEventListener('click', async () => {
-      const minutes = Number(prompt(`Ile masz minut? Teraz ok. ${estimateMinutes(draft.entries)} min.`, '30'));
+      const minutes = Number(await askText('Ile masz minut?', { title: 'Zmieść w czasie', value: '30', type: 'number', inputmode: 'numeric', hint: `Teraz ok. ${estimateMinutes(draft.entries)} min.`, ok: 'Skróć' }));
       if (!(minutes > 0)) return;
-      if (estimateMinutes(draft.entries) <= minutes) return alert('Ten trening już się mieści w tym czasie.');
+      if (estimateMinutes(draft.entries) <= minutes) return toast('Ten trening już się mieści w tym czasie.');
       const r = fitToTime(draft.entries, minutes);
       draft.entries = r.entries.map(({ main, ...en }) => en);
       await persist();
       draw();
-      alert(`Gotowe: ok. ${r.minutes} min. Główne ćwiczenia zostały, dodatkowe mają po 2 serie w superseriach i krótsze przerwy${r.dropped.length ? `. Pominięte: ${r.dropped.map(exName).join(', ')}` : ''}.`);
+      say(`Ok. ${r.minutes} min. Główne ćwiczenia zostały, dodatkowe mają po 2 serie w superseriach i krótsze przerwy${r.dropped.length ? `. Pominięte: ${r.dropped.map(exName).join(', ')}` : ''}.`);
     });
     document.getElementById('lighter')?.addEventListener('click', async () => {
       draft.entries = lighterSession(draft.entries);
@@ -1623,7 +1812,7 @@ function drawLog(draft, back) {
       draw();
     };
     document.getElementById('discard').onclick = async () => {
-      if (!confirm('Porzucić ten trening? Wpisane serie zostaną usunięte.')) return;
+      if (!await ask('Wpisane serie zostaną usunięte.', { title: 'Porzucić trening?', ok: 'Porzuć', cancel: 'Trenuj dalej', danger: true })) return;
       stopRest();
       await db.del('draft');
       location.hash = '#/today';
@@ -1640,12 +1829,12 @@ async function finishLog(draft) {
     .map((en) => ({
       exerciseId: en.exerciseId,
       sets: en.sets.filter((x) => x.done && (x.kg != null || x.reps != null))
-        .map(({ kg, reps, rir, warmup }) => ({ kg, reps, ...(rir != null ? { rir } : {}), ...(warmup ? { warmup: true } : {}) })),
+        .map(({ kg, reps, rir, warmup, kind }) => ({ kg, reps, ...(rir != null ? { rir } : {}), ...(warmup ? { warmup: true } : {}), ...(kind && !warmup ? { kind } : {}) })),
       ...(en.note?.trim() ? { note: en.note.trim() } : {}),
     }))
     .filter((en) => en.sets.length);
   if (!entries.length) {
-    alert('Zaznacz ✓ przy wykonanych seriach, żeby zapisać trening.');
+    say('Zaznacz ✓ przy wykonanych seriach, żeby zapisać trening.');
     return;
   }
   const log = {
@@ -1660,7 +1849,7 @@ async function finishLog(draft) {
   };
   for (const en of entries) {
     const best = en.sets
-      .filter((x) => !x.warmup && x.kg > 0 && x.reps > 0 && x.reps <= 10)
+      .filter((x) => !x.warmup && x.kind !== 'drop' && x.kg > 0 && x.reps > 0 && x.reps <= 10)
       .map((x) => ({ ...x, e1rm: estimate1RM(x.kg, x.reps) }))
       .sort((a, b) => b.e1rm - a.e1rm)[0];
     const prev = current1RM(en.exerciseId);
@@ -1698,19 +1887,19 @@ function viewHistory(id) {
       ${log.entries.map((en) => `
         <div class="ex">
           <div class="name">${esc(exName(en.exerciseId))}</div>
-          <div class="meta">${en.sets.map((s) => `<span class="chip${s.warmup ? ' warmup' : ''}">${s.warmup ? 'R · ' : ''}${fmt(s.kg, 2)} kg × ${s.reps ?? '?'}${s.rir != null ? ` · RIR ${s.rir}` : ''}</span>`).join('')}</div>
+          <div class="meta">${en.sets.map((s) => `<span class="chip${s.warmup ? ' warmup' : ''}">${s.warmup ? 'R · ' : s.kind === 'drop' ? 'D · ' : s.kind === 'fail' ? 'U · ' : ''}${fmt(s.kg, 2)} kg × ${s.reps ?? '?'}${s.rir != null ? ` · RIR ${s.rir}` : ''}</span>`).join('')}</div>
           ${en.note ? `<div class="desc">${esc(en.note)}</div>` : ''}
         </div>`).join('')}
     </div>
     <button class="btn secondary" id="share-log">${icon('share-2', 'icon-sm')} Udostępnij podsumowanie</button>
     <button class="btn danger" id="delete-log" style="margin-top:12px">${icon('trash-2', 'icon-sm')} Usuń ten wpis</button>
   `, { back: '#/progress' });
-  document.getElementById('share-log').onclick = () => shareWorkout(log).catch((err) => alert(`Nie udało się przygotować obrazka: ${err.message}`));
+  document.getElementById('share-log').onclick = () => shareWorkout(log).catch((err) => say(`Nie udało się przygotować obrazka: ${err.message}`));
   document.getElementById('delete-log').onclick = async () => {
-    if (!confirm('Usunąć ten trening z historii?')) return;
-    data.workoutLogs = data.workoutLogs.filter((l) => l.id !== id);
-    data.oneRepMaxes = data.oneRepMaxes.filter((m) => !(m.source === 'trening' && m.date === log.date && log.records.includes(m.exerciseId)));
-    await save();
+    await undoable('Usunięto trening z historii.', () => {
+      data.workoutLogs = data.workoutLogs.filter((l) => l.id !== id);
+      data.oneRepMaxes = data.oneRepMaxes.filter((m) => !(m.source === 'trening' && m.date === log.date && log.records.includes(m.exerciseId)));
+    });
     location.hash = '#/progress';
   };
 }
@@ -1899,11 +2088,11 @@ function viewProfile() {
     data.settings.mealTargets = f.get('mealTargets') === 'on';
     data.settings.waterGoalMl = num('waterGoalMl') || null;
     if (next.goalWeightKg != null && !(next.goalWeightKg > 30 && next.goalWeightKg < 300)) {
-      alert('Sprawdź wagę docelową.');
+      say('Sprawdź wagę docelową.');
       return;
     }
     if (!(next.heightCm > 100 && next.heightCm < 250) || !(next.weightKg > 30 && next.weightKg < 300)) {
-      alert('Sprawdź wzrost i wagę.');
+      say('Sprawdź wzrost i wagę.');
       return;
     }
     next.birthYear = next.birthDate ? Number(next.birthDate.slice(0, 4)) : p.birthYear;
@@ -1974,7 +2163,7 @@ function exerciseHistory(id) {
   for (const l of data.workoutLogs ?? []) {
     for (const en of l.entries) {
       if (en.exerciseId !== id) continue;
-      for (const st of en.sets) if (!st.warmup && st.kg > 0 && st.reps > 0 && st.reps <= 10) put(l.date, estimate1RM(st.kg, st.reps));
+      for (const st of en.sets) if (!st.warmup && st.kind !== 'drop' && st.kg > 0 && st.reps > 0 && st.reps <= 10) put(l.date, estimate1RM(st.kg, st.reps));
     }
   }
   for (const m of data.oneRepMaxes ?? []) if (m.exerciseId === id) put(m.date, m.estimated1RM ?? m.weightKg);
@@ -2059,13 +2248,13 @@ function viewExercise(rawId) {
   });
   document.getElementById('delete-ex')?.addEventListener('click', async () => {
     if (uses) {
-      alert(`To ćwiczenie jest w planach ${uses} ${uses === 1 ? 'raz' : 'razy'}. Usuń je najpierw z treningów.`);
+      say(`To ćwiczenie jest w planach ${uses} ${uses === 1 ? 'raz' : 'razy'}. Usuń je najpierw z treningów.`);
       return;
     }
-    if (!confirm(`Usunąć „${info.name}”?`)) return;
-    data.exercises = data.exercises.filter((e) => e !== ex);
-    exerciseById.delete(id);
-    await save();
+    await undoable(`Usunięto „${info.name}”.`, () => {
+      data.exercises = data.exercises.filter((e) => e !== ex);
+      exerciseById.delete(id);
+    });
     location.hash = '#/exercises';
   });
 }
@@ -2082,7 +2271,7 @@ function viewDiet(date = todayIso()) {
     const pct = goal ? Math.min(100, Math.round(eaten / goal * 100)) : 0;
     const over = goal && eaten > goal * 1.05;
     return `<div class="macro"><span>${label}</span>
-      <div class="bar"><span style="width:${pct}%;background:${over ? '#ff3b30' : color}"></span></div>
+      <div class="bar"><span style="width:${pct}%;background:${over ? 'var(--danger)' : color}"></span></div>
       <b style="text-align:right">${fmt(eaten)}${goal ? `<span class="muted small">/${fmt(goal)}</span>` : ''}</b></div>`;
   };
   const left = t ? Math.round(t.kcal - total.kcal) : null;
@@ -2141,6 +2330,8 @@ function viewDiet(date = todayIso()) {
       <a class="row" href="#/mealplan"><span class="grow">Jadłospis i lista zakupów</span><span class="chev">${icon('chevron-right', 'icon-sm')}</span></a>
       <a class="row" href="#/recipes"><span class="grow">Przepisy</span><span class="sub">${allRecipes().length}</span><span class="chev">${icon('chevron-right', 'icon-sm')}</span></a>
       <a class="row" href="#/foods"><span class="grow">Moje produkty i posiłki</span><span class="chev">${icon('chevron-right', 'icon-sm')}</span></a>
+      <a class="row" href="#/fasting"><span class="grow">Post przerywany</span><span class="sub">${data.fasting?.on ? `${data.fasting.goalH}:${24 - data.fasting.goalH}` : 'wyłączony'}</span><span class="chev">${icon('chevron-right', 'icon-sm')}</span></a>
+      <a class="row" href="#/habits"><span class="grow">Nawyki i suplementy</span><span class="sub">${(data.habits ?? []).length || ''}</span><span class="chev">${icon('chevron-right', 'icon-sm')}</span></a>
     </div>
   `);
   view.onclick = async (ev) => {
@@ -2162,14 +2353,14 @@ function viewDiet(date = todayIso()) {
     const btn = ev.target.closest('[data-save-meal]');
     if (!btn) return;
     const meal = btn.dataset.saveMeal;
-    const name = prompt('Nazwa posiłku (np. „Owsianka z jagodami”)', MEALS[meal])?.trim();
+    const name = await askText('Nazwa posiłku', { title: 'Zapisz posiłek', value: MEALS[meal], placeholder: 'np. Owsianka z jagodami' });
     if (!name) return;
     data.mealTemplates.push({
       id: uid('meal'), name,
       items: entries.filter((e) => e.meal === meal && !e.quick).map((e) => ({ foodId: e.foodId, grams: e.grams })),
     });
     await save();
-    alert(`Zapisano „${name}”. Znajdziesz go w zakładce „Moje” przy dodawaniu.`);
+    toast(`Zapisano „${name}”. Znajdziesz go w „Moje” przy dodawaniu.`);
   };
 }
 
@@ -2281,8 +2472,10 @@ function viewFoodAdd(date, meal) {
   render(`Dodaj: ${label}`, `
     <form class="card add-row" id="food-search">
       <input type="search" name="q" placeholder="Szukaj produktu lub posiłku" autocomplete="off" enterkeyhint="search" aria-label="Szukaj produktu">
+      ${voiceSupported() ? `<button type="button" class="icon-btn" id="voice" aria-label="Powiedz, co zjadłeś">${icon('mic')}</button>` : ''}
       <button type="button" class="icon-btn" id="scan" aria-label="Skanuj kod kreskowy">${icon('scan-barcode')}</button>
     </form>
+    <p class="voice-live small muted" id="voice-live" aria-live="polite" hidden></p>
     <div id="food-results"></div>
     <details class="list" id="text-box">
       <summary><span class="grow">Wpisz posiłek tekstem</span><span class="chev">${icon('chevron-right', 'icon-sm')}</span></summary>
@@ -2365,6 +2558,29 @@ function viewFoodAdd(date, meal) {
       location.hash = `#/diet/${date}`;
     });
   };
+  document.getElementById('voice')?.addEventListener('click', async (ev) => {
+    const btn = ev.currentTarget;
+    const live = document.getElementById('voice-live');
+    btn.classList.add('listening');
+    live.hidden = false;
+    live.textContent = 'Słucham… powiedz np. „dwa jajka i kromka chleba”.';
+    try {
+      const text = await listen({ onPartial: (t) => { live.textContent = t; } });
+      if (!text) {
+        live.textContent = 'Nic nie usłyszałem. Spróbuj jeszcze raz.';
+        return;
+      }
+      document.getElementById('text-box').open = true;
+      const form = document.getElementById('text-form');
+      form.text.value = text;
+      live.hidden = true;
+      form.requestSubmit();
+    } catch (err) {
+      live.textContent = err.message;
+    } finally {
+      btn.classList.remove('listening');
+    }
+  });
   document.getElementById('text-form').onsubmit = async (ev) => {
     ev.preventDefault();
     textLines = await matchLines(ev.target.text.value);
@@ -2555,7 +2771,7 @@ function viewFood(idOrNew, date, meal) {
     };
     const per100 = { kcal: n('kcal'), p: n('p') ?? 0, f: n('f') ?? 0, c: n('c') ?? 0 };
     for (const k of ['fib', 'sug', 'sat', 'salt']) if (n(k) != null) per100[k] = n(k);
-    if (!(per100.kcal >= 0) || per100.kcal == null) { alert('Podaj kalorie na 100 g.'); return; }
+    if (!(per100.kcal >= 0) || per100.kcal == null) { say('Podaj kalorie na 100 g.'); return; }
     const code = String(f.get('code') ?? '').replace(/\D/g, '');
     const values = { name: String(f.get('name')).trim(), brand: String(f.get('brand')).trim() || null, per100, servingG: n('servingG'), pricePerKg: n('pricePerKg'), ...(code ? { code } : {}) };
     if (isNew) {
@@ -2570,12 +2786,11 @@ function viewFood(idOrNew, date, meal) {
     }
   };
   document.getElementById('delete-food')?.addEventListener('click', async () => {
-    if (inUse && !confirm(`Ten produkt jest w dzienniku ${inUse} razy. Usunąć go razem z tymi wpisami?`)) return;
-    if (!inUse && !confirm(`Usunąć „${food.name}”?`)) return;
-    data.foods = data.foods.filter((x) => x !== food);
-    for (const d of Object.keys(data.foodLog)) data.foodLog[d] = data.foodLog[d].filter((e) => e.foodId !== food.id);
-    for (const m of data.mealTemplates) m.items = m.items.filter((it) => it.foodId !== food.id);
-    await save();
+    await undoable(inUse ? `Usunięto „${food.name}” i ${inUse} ${plural(inUse, 'wpis', 'wpisy', 'wpisów')} z dziennika.` : `Usunięto „${food.name}”.`, () => {
+      data.foods = data.foods.filter((x) => x !== food);
+      for (const d of Object.keys(data.foodLog)) data.foodLog[d] = data.foodLog[d].filter((e) => e.foodId !== food.id);
+      for (const m of data.mealTemplates) m.items = m.items.filter((it) => it.foodId !== food.id);
+    });
     location.hash = '#/foods';
   });
 }
@@ -2625,13 +2840,13 @@ async function bindOffContribute(food) {
       }
       food.offSentAt = todayIso();
       await save();
-      alert((confirmed ? 'Zapisane w Open Food Facts. Dziękuję!' : 'Wysłane do Open Food Facts. Produkt pojawi się w bazie po chwili.')
+      say((confirmed ? 'Zapisane w Open Food Facts. Dziękuję!' : 'Wysłane do Open Food Facts. Produkt pojawi się w bazie po chwili.')
         + (photoError ? `\n\nProdukt jest zapisany, ale zdjęcie nie: ${photoError}` : ''));
       route();
     } catch (err) {
       btn.disabled = false;
       btn.textContent = 'Wyślij';
-      alert(err.message.includes('fetch') ? 'Brak połączenia z Open Food Facts. Spróbuj później.' : err.message);
+      say(err.message.includes('fetch') ? 'Brak połączenia z Open Food Facts. Spróbuj później.' : err.message);
     }
   };
 }
@@ -2669,11 +2884,10 @@ function viewFoods() {
     const ren = ev.target.closest('[data-rename-meal]');
     if (del) {
       const m = data.mealTemplates.find((x) => x.id === del.dataset.delMeal);
-      if (!confirm(`Usunąć posiłek „${m.name}”? Produkty zostają.`)) return;
-      data.mealTemplates = data.mealTemplates.filter((x) => x !== m);
+      return undoable(`Usunięto „${m.name}”.`, () => { data.mealTemplates = data.mealTemplates.filter((x) => x !== m); }).then(route);
     } else if (ren) {
       const m = data.mealTemplates.find((x) => x.id === ren.dataset.renameMeal);
-      const name = prompt('Nazwa posiłku', m.name)?.trim();
+      const name = await askText('Nazwa posiłku', { title: 'Zmień nazwę', value: m.name });
       if (!name) return;
       m.name = name;
     } else return;
@@ -2728,7 +2942,10 @@ function stepBars(days) {
   const max = Math.max(goal, ...rows.map((r) => r.steps));
   const w = 320, h = 120, gap = 4, bw = (w - gap * (days - 1)) / days;
   const gy = h - 16 - goal / max * (h - 24);
-  return `<svg class="bars" viewBox="0 0 ${w} ${h}" role="img" aria-label="Kroki">
+  const logged = rows.filter((r) => r.steps > 0);
+  const label = `Kroki z ostatnich ${days} dni: średnio ${fmt(avg(logged.map((r) => r.steps)) ?? 0)}, cel ${fmt(goal)} osiągnięty w ${rows.filter((r) => r.steps >= goal).length} ${plural(rows.filter((r) => r.steps >= goal).length, 'dniu', 'dniach', 'dniach')}.`;
+  const pts = rows.map((r, i) => [Math.round((i * (bw + gap) + bw / 2) / w * 1000) / 10, Math.round((h - 16 - r.steps / max * (h - 24)) / h * 1000) / 10, `${fmt(r.steps)} kroków · ${dateLabel(r.date)}`]);
+  return `<div class="chart" data-pts="${esc(JSON.stringify(pts))}"><svg class="bars" viewBox="0 0 ${w} ${h}" role="img" aria-label="${esc(label)}">
     ${rows.map((r, i) => {
       const bh = r.steps / max * (h - 24);
       return `<rect x="${(i * (bw + gap)).toFixed(1)}" y="${(h - 16 - bh).toFixed(1)}" width="${bw.toFixed(1)}" height="${bh.toFixed(1)}" rx="3" class="${r.steps >= goal ? 'hit' : ''}"/>`;
@@ -2736,7 +2953,7 @@ function stepBars(days) {
     <line x1="0" x2="${w}" y1="${gy.toFixed(1)}" y2="${gy.toFixed(1)}" class="goal"/>
     <text x="0" y="${h - 2}">${dateLabel(rows[0].date)}</text>
     <text x="${w}" y="${h - 2}" text-anchor="end">dziś</text>
-  </svg>`;
+  </svg><i class="chart-dot" hidden></i><span class="chart-tip" hidden></span></div>`;
 }
 
 function viewSteps() {
@@ -2782,19 +2999,19 @@ function viewSteps() {
     try {
       text = await navigator.clipboard.readText();
     } catch {
-      text = prompt('Wklej tekst ze Skrótu (np. kroki=8500 kcal=420)');
+      text = await askText('Wklej tekst ze Skrótu', { placeholder: 'kroki=8500 kcal=420', ok: 'Zapisz' });
     }
     if (text == null) return;
     const values = parseHealthText(text);
     if (Object.values(values).every((v) => v == null)) {
       const seen = text.trim() ? `W schowku jest: „${text.trim().slice(0, 60)}”, a nie dane ze Skrótu.` : 'Schowek jest pusty.';
-      if (confirm(`${seen}\n\nNajpierw uruchom skrót „Zdrowie → Progress”. Nie masz go jeszcze? Pokazać, jak go zrobić?`)) location.hash = '#/shortcut';
+      if (await ask(`${seen}\n\nNajpierw uruchom skrót „Zdrowie → Progress”.`, { title: 'Brak danych ze Skrótu', ok: 'Jak zrobić skrót', cancel: 'Zamknij' })) location.hash = '#/shortcut';
       return;
     }
     applyHealthValues(today, values);
     await save();
     const got = [values.steps != null && 'kroki', values.activeKcal != null && 'kcal', values.sleepMin != null && 'sen', values.restingHr != null && 'tętno', values.weightKg && 'waga'].filter(Boolean);
-    alert(`Zapisano: ${got.join(', ')}.`);
+    toast(`Zapisano: ${got.join(', ')}.`);
     route();
   };
 }
@@ -2842,7 +3059,7 @@ function viewShortcut() {
       await navigator.clipboard.writeText(SHORTCUT_TEXT);
       copyBtn.textContent = 'Skopiowano';
     } catch {
-      prompt('Skopiuj ten tekst:', SHORTCUT_TEXT);
+      showCopy('Skopiuj ten tekst', SHORTCUT_TEXT);
     }
   };
 }
@@ -2916,7 +3133,7 @@ function addTemplateProgram(t) {
   for (const exId of templateExerciseIds(t)) addCatalogExercise(exId);
   const program = buildProgram(t, uid('plan'));
   const fit = adaptToEquipment(program, addCatalogExercise);
-  if (fit.swapped) alert(`Dopasowano do Twojego sprzętu: ${fit.swapped} ${plural(fit.swapped, 'ćwiczenie', 'ćwiczenia', 'ćwiczeń')} zamieniono na podobne.${fit.left ? ` ${fit.left} nadal wymaga sprzętu, którego nie masz; zamienisz je w trakcie treningu.` : ''}`);
+  if (fit.swapped) say(`Dopasowano do Twojego sprzętu: ${fit.swapped} ${plural(fit.swapped, 'ćwiczenie', 'ćwiczenia', 'ćwiczeń')} zamieniono na podobne.${fit.left ? ` ${fit.left} nadal wymaga sprzętu, którego nie masz; zamienisz je w trakcie treningu.` : ''}`);
   data.programs.push(program);
   data.settings.currentProgram = program.id;
   data.settings.currentWeek = 1;
@@ -2960,6 +3177,10 @@ const ROUTES = [
   [/^#\/photos\/(\w+)$/, viewPhotos, 'progress'],
   [/^#\/cloud$/, viewCloud, null],
   [/^#\/challenges$/, viewChallenges, 'today'],
+  [/^#\/habits$/, viewHabits, 'today'],
+  [/^#\/fasting$/, viewFasting, 'diet'],
+  [/^#\/search$/, viewSearch, null],
+  [/^#\/today-edit$/, viewTodayEdit, 'today'],
   [/^#\/challenge\/([\w-]+)$/, viewChallenge, 'today'],
   [/^#\/challenge-join\/([\w-]+)$/, viewChallengeJoin, 'today'],
   [/^#\/wrapped$/, () => viewWrapped(), 'progress'],
@@ -2996,6 +3217,7 @@ function route() {
     keepAwake(false);
   }
   document.getElementById('tabbar').hidden = !data;
+  document.getElementById('search-link').hidden = !data;
   if (!data) {
     if (hash === '#/welcome') return viewWelcome();
     // A shared plan opened before the first start waits until the profile is set up.
@@ -3013,14 +3235,69 @@ function route() {
   location.hash = '#/today';
 }
 
+// Shown once after an update to people who already use the app.
+const RELEASE = '2026-11';
+const WHATS_NEW = [
+  ['undo-2', 'Usuwanie z przyciskiem <b>Cofnij</b> i wygodne panele zamiast okienek przeglądarki.'],
+  ['eye', 'Czytelniejsze kolory, a tekst rośnie razem z rozmiarem czcionki w iPhonie.'],
+  ['dumbbell', 'Stuknij numer serii, żeby oznaczyć drop set albo serię do upadku.'],
+  ['chart-line', 'Poziom siły (DOTS) w Postępach.'],
+  ['hourglass', 'Post przerywany i nawyki (np. kreatyna) do odhaczania na ekranie Dziś.'],
+  ['mic', 'Posiłek można podyktować: Dieta → Dodaj → mikrofon.'],
+  ['search', 'Lupa u góry szuka ćwiczeń, przepisów, planów i ustawień.'],
+  ['file-down', 'Eksport treningów, pomiarów i posiłków do CSV w Ustawieniach.'],
+  ['chart-line', 'Dotknij wykresu, żeby zobaczyć wartość z danego dnia.'],
+  ['settings', 'Ekran Dziś możesz dostosować: na dole „Dostosuj ten ekran”.'],
+];
+
+async function whatsNew() {
+  const seen = await db.get('seenRelease');
+  if (seen === RELEASE) return;
+  await db.set('seenRelease', RELEASE);
+  // Someone who just started does not need a list of changes.
+  if (!seen && !data.workoutLogs.length && !Object.values(data.foodLog ?? {}).some((x) => x.length)) return;
+  info('Co nowego', `<ul class="whats-new">${WHATS_NEW.map(([ic, t]) => `<li>${icon(ic, 'icon-sm')}<span>${t}</span></li>`).join('')}</ul>`, 'Super');
+}
+
+// Touching a chart shows the value under the finger (data in data-pts as [x%, y%, label]).
+function bindChartTouch() {
+  const show = (ev) => {
+    const chart = ev.target.closest?.('.chart');
+    if (!chart) return;
+    const pts = JSON.parse(chart.dataset.pts);
+    const r = chart.getBoundingClientRect();
+    const x = (ev.clientX - r.left) / r.width * 100;
+    const p = pts.reduce((a, b) => (Math.abs(b[0] - x) < Math.abs(a[0] - x) ? b : a));
+    const tip = chart.querySelector('.chart-tip');
+    const dot = chart.querySelector('.chart-dot');
+    tip.textContent = p[2];
+    tip.hidden = dot.hidden = false;
+    tip.style.left = `${Math.min(80, Math.max(20, p[0]))}%`;
+    dot.style.left = `${p[0]}%`;
+    dot.style.top = `${p[1]}%`;
+    // A tap on a chart inside a link shows the value instead of opening the link.
+    if (ev.type === 'pointerdown') chart.closest('a')?.addEventListener('click', (e) => e.preventDefault(), { once: true });
+  };
+  document.addEventListener('pointerdown', show);
+  document.addEventListener('pointermove', (ev) => { if (ev.buttons) show(ev); });
+}
+
 async function start() {
   document.querySelectorAll('[data-icon]').forEach((el) => { el.outerHTML = icon(el.dataset.icon); });
   backBtn.innerHTML = icon('chevron-left');
   document.getElementById('settings-link').innerHTML = icon('settings');
+  document.getElementById('search-link').innerHTML = icon('search');
   setData(await db.get('data'));
   startAutoSync((r) => { if (r.status === 'pulled' || (r.status === 'conflict' && /^#\/today|^$/.test(location.hash))) route(); });
-  window.addEventListener('hashchange', route);
+  // Screens slide in like a native app; skipped with Reduce Motion or in older Safari.
+  const calm = matchMedia('(prefers-reduced-motion: reduce)');
+  window.addEventListener('hashchange', () => {
+    if (!document.startViewTransition || calm.matches || document.querySelector('dialog[open]')) return route();
+    document.startViewTransition(() => route());
+  });
   route();
+  if (data) whatsNew();
+  bindChartTouch();
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
 }
 
